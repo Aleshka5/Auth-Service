@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS users;
+DROP TYPE IF EXISTS resume_roles;
+DROP TYPE IF EXISTS storage_roles;
+DROP TYPE IF EXISTS roles;
