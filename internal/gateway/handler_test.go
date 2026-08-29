@@ -36,9 +36,10 @@ type probe struct {
 	storageRole   string
 	userID        string
 	cookie        string
-	authorization string
-	spoofedLeft   string
-	forwardedHost string
+	authorization   string
+	spoofedLeft     string
+	forwardedHost   string
+	forwardedPrefix string
 }
 
 func newUpstream(t *testing.T) (*httptest.Server, *probe) {
@@ -59,6 +60,7 @@ func newUpstream(t *testing.T) (*httptest.Server, *probe) {
 		p.authorization = r.Header.Get("Authorization")
 		p.spoofedLeft = r.Header.Get("X-Auth-Spoof")
 		p.forwardedHost = r.Header.Get("X-Forwarded-Host")
+		p.forwardedPrefix = r.Header.Get("X-Forwarded-Prefix")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"status":"ok"}`)
 	}))
@@ -440,6 +442,41 @@ func TestValidJWTInjectsIdentity(t *testing.T) {
 	}
 	if hr.up.authID != sub {
 		t.Fatalf("user id %q want %q", hr.up.authID, sub)
+	}
+	if hr.up.authorization != "Bearer "+raw {
+		t.Fatalf("hermes Authorization %q", hr.up.authorization)
+	}
+	if hr.up.forwardedPrefix != "/hermes" {
+		t.Fatalf("X-Forwarded-Prefix %q", hr.up.forwardedPrefix)
+	}
+}
+
+func TestHermesOverwritesClientAuthorization(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	r := withAccess(req(http.MethodGet, "/hermes/chat"), raw)
+	r.Header.Set("Authorization", "Bearer spoofed")
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.up.authorization != "Bearer "+raw {
+		t.Fatalf("client Authorization survived: %q", hr.up.authorization)
+	}
+}
+
+func TestAPIUpstreamDoesNotGetHermesBearer(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	rec := hr.do(withAccess(req(http.MethodGet, "/api/me"), raw))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.up.authorization != "" {
+		t.Fatalf("api Authorization should stay empty, got %q", hr.up.authorization)
+	}
+	if hr.up.forwardedPrefix != "" {
+		t.Fatalf("api should not get X-Forwarded-Prefix, got %q", hr.up.forwardedPrefix)
 	}
 }
 

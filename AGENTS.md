@@ -33,6 +33,7 @@ Edge policy: no valid access JWT, or `global_role == BLOCKED` / user in `rejecte
 On proxied requests the gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role`.
 
 - **Non–User-Service** upstreams (`api`, `web`, `hermes`, …): inject `X-Auth-User-Id`, `X-Auth-Email`, `X-Auth-Name` (username), `X-Auth-Role` (access JWT `global_role`). Product services sit **behind the gateway** and trust those headers.
+- **Hermes only:** also set `Authorization: Bearer <access JWT>` and `X-Forwarded-Prefix: /hermes` (from `strip_prefix`). Hermes dashboard auth verifies that JWT via the `auth-gateway` plugin (`deploy/hermes-plugins/auth-gateway`). Do not publish Hermes `:8787`. User-Service still never receives a JWT.
 - **Storage host** (`role_field: storage`): also inject `X-User-Id` (JWT `sub`) and `X-Storage-Role` from User-Service `GET /users/{id}/roles/storage` (not `global_role`). Forward `Cookie` so `auth_session` reaches WebStorage. User-Service 5xx/timeout → 503, no proxy; user 404 → 401.
 - **User-Service** upstream: do **not** forward `Cookie`, `Authorization`, or JWT query params. Set `X-User-Id` from the access JWT `sub`. User-Service never sees a JWT.
 

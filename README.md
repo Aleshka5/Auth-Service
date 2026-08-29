@@ -196,11 +196,13 @@ The gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` so cli
 | `X-Auth-Name` | JWT `username` (User-Service has no display-name field) |
 | `X-Auth-Role` | JWT `global_role` (hub YAML `role_field: global_role`) |
 
+**Hermes** (`upstream: hermes`) additionally receives `Authorization: Bearer <access cookie>` (overwrites any client `Authorization`) and `X-Forwarded-Prefix` from `strip_prefix`. Other product upstreams do not get the access JWT.
+
 **Storage host** (`storage.filenkov.store`, `role_field: storage`) also sets `X-User-Id` (same UUID) and `X-Storage-Role` from User-Service `GET /users/{id}/roles/storage`. Cookie is forwarded. User-Service errors → 503 (or 401 if the user is gone).
 
 **User-Service** upstream: strip `Cookie` and `Authorization`; set `X-User-Id` from JWT `sub`. Do not send JWTs.
 
-`/hermes/*` is admin-only at the edge; the `/hermes` prefix is stripped before proxying to Hermes (`host.docker.internal:8787`).
+`/hermes/*` is admin-only at the edge; the `/hermes` prefix is stripped before proxying to Hermes (`host.docker.internal:8787`). Hermes also receives `Authorization: Bearer <access JWT>` and `X-Forwarded-Prefix: /hermes` so it can bind `0.0.0.0` without a second login. Install `deploy/hermes-plugins/auth-gateway` into `HERMES_HOME/plugins` and set `HERMES_DASHBOARD_AUTH_JWT_SECRET` to the same value as `JWT_SECRET`. See [deploy/hermes-plugins/auth-gateway/README.md](deploy/hermes-plugins/auth-gateway/README.md).
 
 ## Admin (SPA → gateway → User-Service)
 

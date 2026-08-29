@@ -132,6 +132,24 @@ func (s *Server) applyProxyIdentity(pr *httputil.ProxyRequest, t proxyTarget) {
 				pr.Out.Header.Set("X-Storage-Role", t.id.storageRole)
 			}
 		}
+		if t.route.upstreamName == upstreamHermes {
+			injectHermesDashboardAuth(pr, t)
+		}
+	}
+}
+
+// injectHermesDashboardAuth gives Hermes a DashboardAuthProvider credential.
+// Hermes refuses non-loopback binds unless a provider is registered, and its
+// gated middleware authenticates HTTP via Authorization Bearer (then session
+// cookies). The browser never sees this header; we copy the already-validated
+// access cookie so Hermes can verify the same HS256 JWT. User-Service still
+// never receives a JWT.
+func injectHermesDashboardAuth(pr *httputil.ProxyRequest, t proxyTarget) {
+	if c, err := pr.In.Cookie(token.CookieAccess); err == nil && strings.TrimSpace(c.Value) != "" {
+		pr.Out.Header.Set("Authorization", "Bearer "+c.Value)
+	}
+	if prefix := strings.TrimSpace(t.route.stripPrefix); prefix != "" {
+		pr.Out.Header.Set("X-Forwarded-Prefix", prefix)
 	}
 }
 

@@ -17,6 +17,7 @@ const (
 	PolicyReject  = "reject"
 
 	upstreamUserService = "user_service"
+	upstreamHermes      = "hermes"
 )
 
 const (

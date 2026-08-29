@@ -384,7 +384,7 @@ upstreams:
 | `GET /users` exact | `user_service` | **admin** | Hub ADMIN directory list. See [`user-story-admin-directory.md`](user-story-admin-directory.md). |
 | `/users/*` | `user_service` | `session` | GET/PUT by UUID and roles. Strip cookies; set `X-User-Id`. |
 | `/health` | `api` | `public` | Auth API liveness/readiness (Redis) |
-| `/hermes/*` | `hermes` | `admin` | `strip_prefix: /hermes`; `X-Auth-*` |
+| `/hermes/*` | `hermes` | `admin` | `strip_prefix: /hermes`; `X-Auth-*`; `Authorization: Bearer <access JWT>`; `X-Forwarded-Prefix: /hermes` |
 | `/admin`, `/admin/*` | `web` | `admin` | `global_role == ADMIN` |
 | `/*` | `web` | `public` | SPA |
 

@@ -7,7 +7,7 @@ Auth-Service is the **auth edge** for Filenkov hosts. Caddy stays a thin TLS ter
 - Terminate TLS only in **Caddy** (Let’s Encrypt, HTTP→HTTPS). Caddy reverse-proxies all `filenkov.store` traffic to the gateway.
 - Put **host + path routing** in a YAML config file, not in Go. Adding `llm.filenkov.store` later is a config edit, not a code change. `storage.filenkov.store` is enabled in the default YAML (one upstream `storage` → `http://app:8000`).
 - Enforce **edge auth** before any upstream: no valid access JWT (except `public` routes) and `BLOCKED` / `rejected_cache` never reach a backend on `session`/`admin` routes.
-- Inject trusted identity headers on proxied requests. Strip client-supplied `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` first. **Never forward JWTs to User-Service.**
+- Inject trusted identity headers on proxied requests. Strip client-supplied `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` first. **Never forward JWTs to User-Service.** Hermes is the exception: the gateway copies the access cookie into `Authorization: Bearer` so the dashboard auth plugin can satisfy Hermes’s non-loopback bind gate without a second login.
 - Keep **`cmd/api`** as the internal auth API (OAuth, `/api/me`, `/api/refresh`, `/api/logout`, `/health`) on unpublished `:8000`. Keep the **nginx SPA container** as an internal upstream. Do not merge the SPA into either Go binary.
 - Rate-limit by IP at the gateway. Keep API rate limits as defense in depth.
 - JSON-capable logs (`slog` JSON), including access logs for Loki.
@@ -31,7 +31,7 @@ Client
       → api:8000          /oauth/*, /api/*, /health
       → web:80            SPA (public hub + /admin)
       → user_service:8000 /users/*  (Cookie/Authorization stripped; X-User-Id set)
-      → host.docker.internal:8787   /hermes/* (prefix stripped)
+      → host.docker.internal:8787   /hermes/* (prefix stripped; Bearer access JWT + X-Forwarded-Prefix)
       → app:8000          storage.filenkov.store (X-Auth-* + X-User-Id + X-Storage-Role; Cookie forwarded)
 ```
 
