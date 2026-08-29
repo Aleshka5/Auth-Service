@@ -60,7 +60,8 @@ func TestMemoryLastAdmin(t *testing.T) {
 	if _, err := m.UpdateRoles(ctx, admin.ID, RolePatch{Roles: &stranger}); err != ErrLastAdmin {
 		t.Fatalf("demote last admin: %v", err)
 	}
-	if _, err := m.SetBlocked(ctx, admin.ID, true); err != ErrLastAdmin {
+	blocked := RoleBlocked
+	if _, err := m.UpdateRoles(ctx, admin.ID, RolePatch{Roles: &blocked}); err != ErrLastAdmin {
 		t.Fatalf("block last admin: %v", err)
 	}
 
@@ -68,7 +69,7 @@ func TestMemoryLastAdmin(t *testing.T) {
 	if _, err := m.UpdateRoles(ctx, other.ID, RolePatch{Roles: &adminRole}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.SetBlocked(ctx, admin.ID, true); err != nil {
+	if _, err := m.UpdateRoles(ctx, admin.ID, RolePatch{Roles: &blocked}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -14,7 +14,6 @@ type User struct {
 	Roles        Role
 	StorageRoles ServiceRole
 	ResumeRoles  ServiceRole
-	Blocked      bool
 	LastSeenAt   *time.Time
 	CreatedAt    time.Time
 	UpdatedAt    time.Time

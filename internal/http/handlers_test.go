@@ -167,12 +167,23 @@ func TestMeBlocked(t *testing.T) {
 	hr := newHarness(t, nil)
 	_, sid := hr.login(users.User{
 		GoogleSub: "s", GoogleEmail: "a@b.c", Name: "Ann",
-		Roles: users.RoleStranger, StorageRoles: users.ServiceRoleStranger, ResumeRoles: users.ServiceRoleStranger,
-		Blocked: true,
+		Roles: users.RoleBlocked, StorageRoles: users.ServiceRoleFamily, ResumeRoles: users.ServiceRoleStranger,
 	})
 	rec := hr.do(withCookie(httptest.NewRequest(http.MethodGet, "/api/me", nil), sid))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status %d", rec.Code)
+	}
+}
+
+func TestMeOKWhenOnlyServiceBlocked(t *testing.T) {
+	hr := newHarness(t, nil)
+	_, sid := hr.login(users.User{
+		GoogleSub: "s", GoogleEmail: "a@b.c", Name: "Ann",
+		Roles: users.RoleStranger, StorageRoles: users.ServiceRoleBlocked, ResumeRoles: users.ServiceRoleStranger,
+	})
+	rec := hr.do(withCookie(httptest.NewRequest(http.MethodGet, "/api/me", nil), sid))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -203,7 +214,7 @@ func TestAdminForbiddenForStranger(t *testing.T) {
 	}
 }
 
-func TestAdminListPatchBlock(t *testing.T) {
+func TestAdminListPatchRoles(t *testing.T) {
 	hr := newHarness(t, nil)
 	admin, sid := hr.login(users.User{
 		GoogleSub: "admin", GoogleEmail: "admin@filenkov.store", Name: "Boss",
@@ -218,7 +229,9 @@ func TestAdminListPatchBlock(t *testing.T) {
 	if list.Code != http.StatusOK {
 		t.Fatalf("list %d %s", list.Code, list.Body.String())
 	}
-	var listed struct{ Users []userJSON `json:"users"` }
+	var listed struct {
+		Users []userJSON `json:"users"`
+	}
 	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil {
 		t.Fatal(err)
 	}
@@ -234,14 +247,21 @@ func TestAdminListPatchBlock(t *testing.T) {
 		t.Fatalf("patch %d %s", rec.Code, rec.Body.String())
 	}
 
-	block, _ := json.Marshal(map[string]bool{"blocked": true})
-	req = httptest.NewRequest(http.MethodPost, "/api/admin/users/"+target.ID.String()+"/block", bytes.NewReader(block))
+	block, _ := json.Marshal(map[string]string{"roles": "BLOCKED"})
+	req = httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+target.ID.String(), bytes.NewReader(block))
 	rec = hr.do(withCookie(req, sid))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("block %d %s", rec.Code, rec.Body.String())
 	}
+	var blocked userJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &blocked); err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Roles != "BLOCKED" {
+		t.Fatalf("roles after block: %+v", blocked)
+	}
 
-	demote, _ := json.Marshal(map[string]string{"roles": "STRANGER"})
+	demote, _ := json.Marshal(map[string]string{"roles": "BLOCKED"})
 	req = httptest.NewRequest(http.MethodPatch, "/api/admin/users/"+admin.ID.String(), bytes.NewReader(demote))
 	rec = hr.do(withCookie(req, sid))
 	if rec.Code != http.StatusConflict {
@@ -330,11 +350,40 @@ func TestOAuthCallbackBlocked(t *testing.T) {
 	})
 	hr.mem.Put(users.User{
 		GoogleSub: "blocked", GoogleEmail: "b@x.com", Name: "B",
-		Roles: users.RoleStranger, StorageRoles: users.ServiceRoleStranger, ResumeRoles: users.ServiceRoleStranger,
-		Blocked: true,
+		Roles: users.RoleBlocked, StorageRoles: users.ServiceRoleFamily, ResumeRoles: users.ServiceRoleStranger,
 	})
 	rec := hr.do(httptest.NewRequest(http.MethodGet, "/oauth/google/callback?code=abc&state=st", nil))
 	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOAuthCallbackBlockedForReturnToService(t *testing.T) {
+	hr := newHarness(t, &fakeOAuth{
+		returnTo: "https://storage.filenkov.store/",
+		user:     &oauth.GoogleUser{Sub: "blocked", Email: "b@x.com", Name: "B"},
+	})
+	hr.mem.Put(users.User{
+		GoogleSub: "blocked", GoogleEmail: "b@x.com", Name: "B",
+		Roles: users.RoleAdmin, StorageRoles: users.ServiceRoleBlocked, ResumeRoles: users.ServiceRoleStranger,
+	})
+	rec := hr.do(httptest.NewRequest(http.MethodGet, "/oauth/google/callback?code=abc&state=st", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOAuthCallbackAllowsOtherServiceWhenHubBlocked(t *testing.T) {
+	hr := newHarness(t, &fakeOAuth{
+		returnTo: "https://storage.filenkov.store/",
+		user:     &oauth.GoogleUser{Sub: "blocked", Email: "b@x.com", Name: "B"},
+	})
+	hr.mem.Put(users.User{
+		GoogleSub: "blocked", GoogleEmail: "b@x.com", Name: "B",
+		Roles: users.RoleBlocked, StorageRoles: users.ServiceRoleFamily, ResumeRoles: users.ServiceRoleStranger,
+	})
+	rec := hr.do(httptest.NewRequest(http.MethodGet, "/oauth/google/callback?code=abc&state=st", nil))
+	if rec.Code != http.StatusFound {
 		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
 	}
 }

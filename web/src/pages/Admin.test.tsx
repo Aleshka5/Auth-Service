@@ -49,7 +49,8 @@ describe('Admin', () => {
     renderAdmin()
     expect(await screen.findByText('Ann')).toBeInTheDocument()
     expect(screen.getByText('boss@example.com')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Block' }).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Block' })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: /Site role for Ann/i })).toHaveValue('STRANGER')
 
     const siteRole = screen.getByRole('combobox', { name: /Site role for Ann/i })
     await user.selectOptions(siteRole, 'ADMIN')

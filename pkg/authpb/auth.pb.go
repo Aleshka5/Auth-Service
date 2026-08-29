@@ -118,6 +118,147 @@ func (x *ValidateResponse) GetFields() map[string]string {
 	return nil
 }
 
+type ListUsersRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	CallerHost    string                 `protobuf:"bytes,2,opt,name=caller_host,json=callerHost,proto3" json:"caller_host,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUsersRequest) Reset() {
+	*x = ListUsersRequest{}
+	mi := &file_auth_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUsersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUsersRequest) ProtoMessage() {}
+
+func (x *ListUsersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUsersRequest.ProtoReflect.Descriptor instead.
+func (*ListUsersRequest) Descriptor() ([]byte, []int) {
+	return file_auth_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ListUsersRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ListUsersRequest) GetCallerHost() string {
+	if x != nil {
+		return x.CallerHost
+	}
+	return ""
+}
+
+type ListUser struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Same whitelist projection as Validate for the request caller_host.
+	Fields        map[string]string `protobuf:"bytes,1,rep,name=fields,proto3" json:"fields,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUser) Reset() {
+	*x = ListUser{}
+	mi := &file_auth_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUser) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUser) ProtoMessage() {}
+
+func (x *ListUser) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUser.ProtoReflect.Descriptor instead.
+func (*ListUser) Descriptor() ([]byte, []int) {
+	return file_auth_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ListUser) GetFields() map[string]string {
+	if x != nil {
+		return x.Fields
+	}
+	return nil
+}
+
+type ListUsersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Users         []*ListUser            `protobuf:"bytes,1,rep,name=users,proto3" json:"users,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListUsersResponse) Reset() {
+	*x = ListUsersResponse{}
+	mi := &file_auth_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListUsersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListUsersResponse) ProtoMessage() {}
+
+func (x *ListUsersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_auth_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListUsersResponse.ProtoReflect.Descriptor instead.
+func (*ListUsersResponse) Descriptor() ([]byte, []int) {
+	return file_auth_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ListUsersResponse) GetUsers() []*ListUser {
+	if x != nil {
+		return x.Users
+	}
+	return nil
+}
+
 var File_auth_proto protoreflect.FileDescriptor
 
 const file_auth_proto_rawDesc = "" +
@@ -133,9 +274,22 @@ const file_auth_proto_rawDesc = "" +
 	"\x06fields\x18\x01 \x03(\v2%.auth.v1.ValidateResponse.FieldsEntryR\x06fields\x1a9\n" +
 	"\vFieldsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x012G\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"R\n" +
+	"\x10ListUsersRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
+	"\vcaller_host\x18\x02 \x01(\tR\n" +
+	"callerHost\"|\n" +
+	"\bListUser\x125\n" +
+	"\x06fields\x18\x01 \x03(\v2\x1d.auth.v1.ListUser.FieldsEntryR\x06fields\x1a9\n" +
+	"\vFieldsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"<\n" +
+	"\x11ListUsersResponse\x12'\n" +
+	"\x05users\x18\x01 \x03(\v2\x11.auth.v1.ListUserR\x05users2\x8b\x01\n" +
 	"\x04Auth\x12?\n" +
-	"\bValidate\x12\x18.auth.v1.ValidateRequest\x1a\x19.auth.v1.ValidateResponseB-Z+github.com/aleshka5/auth-service/pkg/authpbb\x06proto3"
+	"\bValidate\x12\x18.auth.v1.ValidateRequest\x1a\x19.auth.v1.ValidateResponse\x12B\n" +
+	"\tListUsers\x12\x19.auth.v1.ListUsersRequest\x1a\x1a.auth.v1.ListUsersResponseB-Z+github.com/aleshka5/auth-service/pkg/authpbb\x06proto3"
 
 var (
 	file_auth_proto_rawDescOnce sync.Once
@@ -149,21 +303,29 @@ func file_auth_proto_rawDescGZIP() []byte {
 	return file_auth_proto_rawDescData
 }
 
-var file_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_auth_proto_goTypes = []any{
-	(*ValidateRequest)(nil),  // 0: auth.v1.ValidateRequest
-	(*ValidateResponse)(nil), // 1: auth.v1.ValidateResponse
-	nil,                      // 2: auth.v1.ValidateResponse.FieldsEntry
+	(*ValidateRequest)(nil),   // 0: auth.v1.ValidateRequest
+	(*ValidateResponse)(nil),  // 1: auth.v1.ValidateResponse
+	(*ListUsersRequest)(nil),  // 2: auth.v1.ListUsersRequest
+	(*ListUser)(nil),          // 3: auth.v1.ListUser
+	(*ListUsersResponse)(nil), // 4: auth.v1.ListUsersResponse
+	nil,                       // 5: auth.v1.ValidateResponse.FieldsEntry
+	nil,                       // 6: auth.v1.ListUser.FieldsEntry
 }
 var file_auth_proto_depIdxs = []int32{
-	2, // 0: auth.v1.ValidateResponse.fields:type_name -> auth.v1.ValidateResponse.FieldsEntry
-	0, // 1: auth.v1.Auth.Validate:input_type -> auth.v1.ValidateRequest
-	1, // 2: auth.v1.Auth.Validate:output_type -> auth.v1.ValidateResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	5, // 0: auth.v1.ValidateResponse.fields:type_name -> auth.v1.ValidateResponse.FieldsEntry
+	6, // 1: auth.v1.ListUser.fields:type_name -> auth.v1.ListUser.FieldsEntry
+	3, // 2: auth.v1.ListUsersResponse.users:type_name -> auth.v1.ListUser
+	0, // 3: auth.v1.Auth.Validate:input_type -> auth.v1.ValidateRequest
+	2, // 4: auth.v1.Auth.ListUsers:input_type -> auth.v1.ListUsersRequest
+	1, // 5: auth.v1.Auth.Validate:output_type -> auth.v1.ValidateResponse
+	4, // 6: auth.v1.Auth.ListUsers:output_type -> auth.v1.ListUsersResponse
+	5, // [5:7] is the sub-list for method output_type
+	3, // [3:5] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_auth_proto_init() }
@@ -177,7 +339,7 @@ func file_auth_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_auth_proto_rawDesc), len(file_auth_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

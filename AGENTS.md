@@ -47,8 +47,8 @@ For prod version it must be builded static FS site.
 Page with some links and About section. One page with header and footer.
 Links should place there: llm.filenkov.store, storage.filenkov.store and filenkov.store/hermes/ - only for admin
 3) Admin page (filenkov.store/admin). Admin authenticated user only available. Contains List of registered users with their roles.
-Admin can change role and block users.
-User name | Email | Block Button | Status (Last activity date time or Blocked)
-roles []
-storage roles []
+Admin can change each service role, including BLOCKED for that service only.
+User name | Email | Status (Last activity date time)
+roles [] (ADMIN | STRANGER | BLOCKED)
+storage roles [] (ADMIN | FAMILY | STRANGER | BLOCKED)
 ...

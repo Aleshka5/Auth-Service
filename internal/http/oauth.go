@@ -3,9 +3,12 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/aleshka5/auth-service/internal/oauth"
 	"github.com/aleshka5/auth-service/internal/users"
+	"github.com/aleshka5/auth-service/internal/whitelist"
 )
 
 func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
@@ -57,8 +60,9 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "login failed")
 		return
 	}
-	if u.Blocked {
-		slog.Warn("login_blocked", "user_id", u.ID.String(), "google_email", u.GoogleEmail)
+	host := returnHost(returnTo)
+	if fields, projErr := whitelist.New(s.cfg.Whitelist).Project(host, u); projErr == nil && users.HasBlockedRole(fields) {
+		slog.Warn("login_blocked", "user_id", u.ID.String(), "google_email", u.GoogleEmail, "host", host)
 		writeError(w, http.StatusForbidden, "blocked")
 		return
 	}
@@ -111,4 +115,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func returnHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }

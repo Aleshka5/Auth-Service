@@ -92,7 +92,7 @@ func Load() (*Config, error) {
 func DefaultWhitelist() map[string][]string {
 	return map[string][]string{
 		"filenkov.store":         {"google_email", "name", "roles"},
-		"storage.filenkov.store": {"name", "storage_roles"},
+		"storage.filenkov.store": {"id", "google_email", "name", "storage_roles"},
 		"resume.filenkov.store":  {"name", "resume_roles"},
 	}
 }

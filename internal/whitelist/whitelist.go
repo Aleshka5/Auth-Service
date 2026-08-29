@@ -46,6 +46,8 @@ func (l *List) Project(host string, u *users.User) (map[string]string, error) {
 	out := make(map[string]string, len(fields))
 	for _, f := range fields {
 		switch f {
+		case "id":
+			out[f] = u.ID.String()
 		case "google_email":
 			out[f] = u.GoogleEmail
 		case "name":

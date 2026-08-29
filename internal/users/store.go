@@ -17,7 +17,7 @@ var (
 	ErrLastAdmin = errors.New("cannot demote or block the last admin")
 )
 
-const userColumns = `id, google_sub, google_email, name, roles, storage_roles, resume_roles, blocked, last_seen_at, created_at, updated_at`
+const userColumns = `id, google_sub, google_email, name, roles, storage_roles, resume_roles, last_seen_at, created_at, updated_at`
 
 type Store struct {
 	pool       *pgxpool.Pool
@@ -62,7 +62,7 @@ ON CONFLICT (google_sub) DO UPDATE SET
 RETURNING `+userColumns+`, (xmax = 0) AS inserted
 `, p.Sub, email, name, role).Scan(
 		&u.ID, &u.GoogleSub, &u.GoogleEmail, &u.Name,
-		&roles, &storage, &resume, &u.Blocked, &u.LastSeenAt, &u.CreatedAt, &u.UpdatedAt,
+		&roles, &storage, &resume, &u.LastSeenAt, &u.CreatedAt, &u.UpdatedAt,
 		&inserted,
 	)
 	if err != nil {
@@ -120,13 +120,12 @@ func (s *Store) UpdateRoles(ctx context.Context, id uuid.UUID, patch RolePatch) 
 		return nil, err
 	}
 
-	demote := patch.Roles != nil && u.Roles == RoleAdmin && *patch.Roles != RoleAdmin
-	if demote {
+	if patch.Roles != nil && u.Roles == RoleAdmin && *patch.Roles != RoleAdmin {
 		n, err := countActiveAdminsTx(ctx, tx)
 		if err != nil {
 			return nil, err
 		}
-		if RemovesLastAdmin(n, *u, true, false) {
+		if RemovesLastAdmin(n, *u, patch.Roles) {
 			return nil, ErrLastAdmin
 		}
 	}
@@ -168,49 +167,6 @@ RETURNING `+userColumns, id, roles, storage, resume))
 	return u, nil
 }
 
-func (s *Store) SetBlocked(ctx context.Context, id uuid.UUID, blocked bool) (*User, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	u, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1 FOR UPDATE`, id))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if blocked && !u.Blocked {
-		n, err := countActiveAdminsTx(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
-		if RemovesLastAdmin(n, *u, false, true) {
-			return nil, ErrLastAdmin
-		}
-	}
-
-	u, err = scanUser(tx.QueryRow(ctx, `
-UPDATE users SET blocked = $2, updated_at = NOW()
-WHERE id = $1
-RETURNING `+userColumns, id, blocked))
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	slog.Info("admin_block",
-		"user_id", u.ID.String(),
-		"google_email", u.GoogleEmail,
-		"blocked", u.Blocked,
-	)
-	return u, nil
-}
-
 func (s *Store) TouchLastSeen(ctx context.Context, id uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `
 UPDATE users
@@ -222,7 +178,7 @@ WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - INTERVAL '1 mi
 
 func countActiveAdminsTx(ctx context.Context, tx pgx.Tx) (int, error) {
 	var n int
-	err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE roles = 'ADMIN' AND NOT blocked`).Scan(&n)
+	err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE roles = 'ADMIN'`).Scan(&n)
 	return n, err
 }
 
@@ -239,7 +195,7 @@ func scanUser(row rowScanner) (*User, error) {
 	)
 	err := row.Scan(
 		&u.ID, &u.GoogleSub, &u.GoogleEmail, &u.Name,
-		&roles, &storage, &resume, &u.Blocked, &u.LastSeenAt, &u.CreatedAt, &u.UpdatedAt,
+		&roles, &storage, &resume, &u.LastSeenAt, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err

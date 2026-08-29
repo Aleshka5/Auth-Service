@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchAdminUsers, fetchMe, googleAuthPath, logout, patchUser, setUserBlocked } from './api'
+import { fetchAdminUsers, fetchMe, googleAuthPath, logout, patchUser } from './api'
 import { admin, jsonResponse, stranger } from './test/fixtures'
 
 afterEach(() => {
@@ -42,22 +42,13 @@ describe('admin api', () => {
     await expect(fetchAdminUsers()).resolves.toEqual([admin, stranger])
   })
 
-  it('patches and blocks', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      if (url.endsWith('/block')) return jsonResponse({ ...stranger, blocked: true })
-      return jsonResponse({ ...stranger, storage_roles: 'ADMIN' })
-    })
+  it('patches roles', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ...stranger, storage_roles: 'ADMIN' }))
     vi.stubGlobal('fetch', fetchMock)
     await patchUser(stranger.id, { storage_roles: 'ADMIN' })
-    await setUserBlocked(stranger.id, true)
     await logout()
     const urls = fetchMock.mock.calls.map((c) => String(c[0]))
-    expect(urls).toEqual([
-      `/api/admin/users/${stranger.id}`,
-      `/api/admin/users/${stranger.id}/block`,
-      '/api/logout',
-    ])
-    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' })
+    expect(urls).toEqual([`/api/admin/users/${stranger.id}`, '/api/logout'])
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'PATCH' })
   })
 })

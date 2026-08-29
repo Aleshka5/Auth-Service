@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/aleshka5/auth-service/internal/users"
@@ -71,43 +72,9 @@ func (s *Server) handleAdminPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		slog.Error("admin_role_update_failed", "err", err, "user_id", id.String())
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
-	}
-	writeJSON(w, http.StatusOK, toUserJSON(u))
-}
-
-func (s *Server) handleAdminBlock(w http.ResponseWriter, r *http.Request) {
-	id, err := parseID(r.PathValue("id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	var body struct {
-		Blocked *bool `json:"blocked"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Blocked == nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
-		return
-	}
-	u, err := s.users.SetBlocked(r.Context(), id, *body.Blocked)
-	if errors.Is(err, users.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	if errors.Is(err, users.ErrLastAdmin) {
-		writeError(w, http.StatusConflict, "cannot demote or block the last admin")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update failed")
-		return
-	}
-	if u.Blocked {
-		if delErr := s.sessions.DeleteUserSessions(r.Context(), u.ID); delErr != nil {
-			writeError(w, http.StatusInternalServerError, "session revoke failed")
-			return
-		}
 	}
 	writeJSON(w, http.StatusOK, toUserJSON(u))
 }

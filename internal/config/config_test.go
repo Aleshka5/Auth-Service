@@ -69,4 +69,18 @@ func TestDefaultWhitelist(t *testing.T) {
 	if len(wl["filenkov.store"]) != 3 {
 		t.Fatalf("hub fields: %v", wl["filenkov.store"])
 	}
+	st := wl["storage.filenkov.store"]
+	wantStorage := []string{"id", "google_email", "name", "storage_roles"}
+	if len(st) != len(wantStorage) {
+		t.Fatalf("storage fields: %v", st)
+	}
+	for i, f := range wantStorage {
+		if st[i] != f {
+			t.Fatalf("storage fields: %v", st)
+		}
+	}
+	rs := wl["resume.filenkov.store"]
+	if len(rs) != 2 || rs[0] != "name" || rs[1] != "resume_roles" {
+		t.Fatalf("resume fields: %v", rs)
+	}
 }

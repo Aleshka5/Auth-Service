@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import { Navigate } from 'react-router-dom'
-import { fetchAdminUsers, patchUser, setUserBlocked } from '../api'
+import { fetchAdminUsers, patchUser } from '../api'
 import { useAuth } from '../auth'
-import { isAdmin, SERVICE_ROLES, SITE_ROLES, type ServiceRole, type SiteRole, type User } from '../types'
+import {
+  isAdmin,
+  isBlockedRole,
+  SERVICE_ROLES,
+  SITE_ROLES,
+  type ServiceRole,
+  type SiteRole,
+  type User,
+} from '../types'
 
 function formatSeen(iso: string | null): string {
   if (!iso) return 'Never'
@@ -12,10 +20,6 @@ function formatSeen(iso: string | null): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(d)
-}
-
-function statusCell(user: User): string {
-  return user.blocked ? 'Blocked' : formatSeen(user.last_seen_at)
 }
 
 export function Admin() {
@@ -71,20 +75,6 @@ export function Admin() {
     }
   }
 
-  async function onBlock(target: User) {
-    const key = String(target.id)
-    setBusyId(key)
-    setError(null)
-    try {
-      await setUserBlocked(target.id, !target.blocked)
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not update block status')
-    } finally {
-      setBusyId(null)
-    }
-  }
-
   return (
     <>
       <div className="admin-head">
@@ -106,7 +96,6 @@ export function Admin() {
               <tr>
                 <th>Name</th>
                 <th>Email</th>
-                <th>Block</th>
                 <th>Status</th>
                 <th>Roles</th>
                 <th>Storage roles</th>
@@ -120,20 +109,11 @@ export function Admin() {
                   <tr key={String(row.id)}>
                     <td>{row.name}</td>
                     <td>{row.google_email}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className={row.blocked ? 'btn btn-ghost btn-small' : 'btn btn-danger btn-small'}
-                        disabled={busy}
-                        onClick={() => void onBlock(row)}
-                      >
-                        {row.blocked ? 'Unblock' : 'Block'}
-                      </button>
-                    </td>
-                    <td className={row.blocked ? 'status-blocked' : undefined}>{statusCell(row)}</td>
+                    <td>{formatSeen(row.last_seen_at)}</td>
                     <td>
                       <select
                         aria-label={`Site role for ${row.name}`}
+                        className={isBlockedRole(row.roles) ? 'status-blocked' : undefined}
                         value={row.roles}
                         disabled={busy}
                         onChange={(e: ChangeEvent<HTMLSelectElement>) =>
@@ -150,6 +130,7 @@ export function Admin() {
                     <td>
                       <select
                         aria-label={`Storage role for ${row.name}`}
+                        className={isBlockedRole(row.storage_roles) ? 'status-blocked' : undefined}
                         value={row.storage_roles}
                         disabled={busy}
                         onChange={(e: ChangeEvent<HTMLSelectElement>) =>
@@ -166,6 +147,7 @@ export function Admin() {
                     <td>
                       <select
                         aria-label={`Resume role for ${row.name}`}
+                        className={isBlockedRole(row.resume_roles) ? 'status-blocked' : undefined}
                         value={row.resume_roles}
                         disabled={busy}
                         onChange={(e: ChangeEvent<HTMLSelectElement>) =>

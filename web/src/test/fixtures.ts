@@ -8,7 +8,6 @@ export const stranger: User = {
   roles: 'STRANGER',
   storage_roles: 'FAMILY',
   resume_roles: 'STRANGER',
-  blocked: false,
   last_seen_at: '2026-08-13T12:00:00Z',
 }
 

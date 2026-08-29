@@ -58,7 +58,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/me", apiLim(http.HandlerFunc(s.handleMe)))
 	mux.Handle("GET /api/admin/users", apiLim(s.requireAdmin(s.handleAdminList)))
 	mux.Handle("PATCH /api/admin/users/{id}", apiLim(s.requireAdmin(s.handleAdminPatch)))
-	mux.Handle("POST /api/admin/users/{id}/block", apiLim(s.requireAdmin(s.handleAdminBlock)))
 
 	return mux
 }
@@ -89,7 +88,7 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.Handler {
 		if !ok {
 			return
 		}
-		if u.Blocked || u.Roles != users.RoleAdmin {
+		if u.Roles != users.RoleAdmin {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
@@ -113,7 +112,7 @@ func (s *Server) currentUser(w http.ResponseWriter, r *http.Request, touch bool)
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return nil, "", false
 	}
-	if u.Blocked {
+	if u.Roles == users.RoleBlocked {
 		writeError(w, http.StatusForbidden, "blocked")
 		return nil, "", false
 	}
@@ -157,7 +156,6 @@ type userJSON struct {
 	Roles        string  `json:"roles"`
 	StorageRoles string  `json:"storage_roles"`
 	ResumeRoles  string  `json:"resume_roles"`
-	Blocked      bool    `json:"blocked"`
 	LastSeenAt   *string `json:"last_seen_at"`
 }
 
@@ -169,7 +167,6 @@ func toUserJSON(u *users.User) userJSON {
 		Roles:        string(u.Roles),
 		StorageRoles: string(u.StorageRoles),
 		ResumeRoles:  string(u.ResumeRoles),
-		Blocked:      u.Blocked,
 	}
 	if u.LastSeenAt != nil {
 		s := u.LastSeenAt.UTC().Format(time.RFC3339)

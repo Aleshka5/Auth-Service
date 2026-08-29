@@ -12,6 +12,5 @@ type Repository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*User, error)
 	List(ctx context.Context) ([]User, error)
 	UpdateRoles(ctx context.Context, id uuid.UUID, patch RolePatch) (*User, error)
-	SetBlocked(ctx context.Context, id uuid.UUID, blocked bool) (*User, error)
 	TouchLastSeen(ctx context.Context, id uuid.UUID) error
 }

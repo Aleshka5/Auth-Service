@@ -13,7 +13,7 @@ import (
 func TestProject(t *testing.T) {
 	l := New(map[string][]string{
 		"filenkov.store":         {"google_email", "name", "roles"},
-		"storage.filenkov.store": {"name", "storage_roles"},
+		"storage.filenkov.store": {"id", "google_email", "name", "storage_roles"},
 		"resume.filenkov.store":  {"name", "resume_roles"},
 	})
 	u := &users.User{
@@ -29,7 +29,7 @@ func TestProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hub["google_email"] != "a@b.c" || hub["roles"] != "ADMIN" || hub["storage_roles"] != "" {
+	if hub["google_email"] != "a@b.c" || hub["roles"] != "ADMIN" || hub["storage_roles"] != "" || hub["id"] != "" {
 		t.Fatalf("hub projection leaked extra fields: %#v", hub)
 	}
 
@@ -37,8 +37,19 @@ func TestProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st["name"] != "Ann" || st["storage_roles"] != "FAMILY" || st["google_email"] != "" {
+	if st["id"] != u.ID.String() || st["google_email"] != "a@b.c" || st["name"] != "Ann" || st["storage_roles"] != "FAMILY" {
 		t.Fatalf("storage projection: %#v", st)
+	}
+	if _, ok := st["roles"]; ok {
+		t.Fatalf("storage projection leaked hub roles: %#v", st)
+	}
+
+	rs, err := l.Project("resume.filenkov.store", u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs["name"] != "Ann" || rs["resume_roles"] != "STRANGER" || rs["id"] != "" || rs["google_email"] != "" || rs["storage_roles"] != "" {
+		t.Fatalf("resume projection: %#v", rs)
 	}
 
 	if _, err := l.Project("llm.filenkov.store", u); err != ErrUnknownHost {
@@ -47,7 +58,7 @@ func TestProject(t *testing.T) {
 }
 
 func TestProjectUnknownField(t *testing.T) {
-	l := New(map[string][]string{"filenkov.store": {"nope"}})
+	l := New(map[string][]string{"filenkov.store": {"uuid"}})
 	if _, err := l.Project("filenkov.store", &users.User{}); err == nil {
 		t.Fatal("expected unknown field")
 	}

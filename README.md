@@ -1,6 +1,6 @@
 # Auth-Service
 
-Google OAuth2 hub for `filenkov.store`: one httpOnly session cookie on `.filenkov.store`, Postgres role enums, Redis sessions, and an internal gRPC `Validate` API for other LAN services.
+Google OAuth2 hub for `filenkov.store`: one httpOnly session cookie on `.filenkov.store`, Postgres role enums, Redis sessions, and an internal gRPC `Validate` / `ListUsers` API for other LAN services.
 
 The browser never sees a token in the URL. Product backends (storage, resume, …) extract the `auth_session` cookie and call gRPC `Validate` on every request.
 
@@ -10,7 +10,7 @@ The browser never sees a token in the URL. Product backends (storage, resume, �
 cmd/api/          HTTP + gRPC process
 internal/         config, http, grpc, oauth, session, users, whitelist, ratelimit, log
 migrations/       golang-migrate SQL
-proto/            Validate service
+proto/            Validate + ListUsers service
 pkg/authpb/       generated Go stubs (import from other services)
 web/              Vite SPA (static nginx image)
 deploy/           docker-compose.yml, Dockerfiles
@@ -127,10 +127,9 @@ JSON, same-origin (no CORS). Cookie: `auth_session`, `HttpOnly`, `SameSite=Lax`,
 | `GET` | `/oauth/google?return_to=` | — | CSRF state in Redis; `return_to` must be `https` and an exact whitelist host. With `AUTH_DEV_HTTP=true`, `http://localhost` and `http://127.0.0.1` are also allowed. |
 | `GET` | `/oauth/google/callback` | — | Upsert user, set cookie, 302 to `return_to` |
 | `POST` | `/api/logout` | cookie | Deletes Redis session, clears cookie |
-| `GET` | `/api/me` | cookie | `401` if anonymous |
+| `GET` | `/api/me` | cookie | `401` if anonymous, `403` if hub `roles=BLOCKED` |
 | `GET` | `/api/admin/users` | cookie + `roles=ADMIN` | `{ "users": [ ... ] }` |
-| `PATCH` | `/api/admin/users/:id` | admin | Optional `roles`, `storage_roles`, `resume_roles` |
-| `POST` | `/api/admin/users/:id/block` | admin | `{ "blocked": true\|false }` |
+| `PATCH` | `/api/admin/users/:id` | admin | Optional `roles`, `storage_roles`, `resume_roles` (including `BLOCKED` for that service) |
 | `GET` | `/health` | — | Postgres + Redis ping |
 
 `GET /api/me` body:
@@ -143,12 +142,11 @@ JSON, same-origin (no CORS). Cookie: `auth_session`, `HttpOnly`, `SameSite=Lax`,
   "roles": "ADMIN",
   "storage_roles": "STRANGER",
   "resume_roles": "STRANGER",
-  "blocked": false,
   "last_seen_at": "2026-08-13T12:00:00Z"
 }
 ```
 
-Signup is open to any Google account. New users get `STRANGER` on every role column. The first insert of `ADMIN_EMAIL` gets `roles=ADMIN`; later logins do not re-apply the env var. Demoting or blocking the last active admin returns `409`.
+Signup is open to any Google account. New users get `STRANGER` on every role column. The first insert of `ADMIN_EMAIL` gets `roles=ADMIN`; later logins do not re-apply the env var. Demoting or setting `roles=BLOCKED` on the last active admin returns `409`.
 
 IP rate limits (Redis): OAuth ~10/min, `/api/*` ~60/min.
 
@@ -158,18 +156,22 @@ Other services pass the session id (from the cookie) and their host:
 
 ```text
 rpc Validate(ValidateRequest) returns (ValidateResponse);
+rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
 ```
 
-`ValidateRequest`: `session_id`, `caller_host`  
-`ValidateResponse`: `map<string,string> fields` projected from the whitelist.
+`ValidateRequest` / `ListUsersRequest`: `session_id`, `caller_host`  
+`ValidateResponse`: `map<string,string> fields` projected from the whitelist.  
+`ListUsersResponse`: `repeated ListUser users`, each with the same whitelist `fields` map as Validate for that host.
 
 | Host | Fields |
 |------|--------|
 | `filenkov.store` | `google_email`, `name`, `roles` |
-| `storage.filenkov.store` | `name`, `storage_roles` |
+| `storage.filenkov.store` | `id`, `google_email`, `name`, `storage_roles` |
 | `resume.filenkov.store` | `name`, `resume_roles` |
 
-There is no LLM audience. Blocked users get `PERMISSION_DENIED`; bad sessions get `UNAUTHENTICATED`.
+There is no LLM audience. If the caller's role column is `BLOCKED` (hub `roles`, `storage_roles`, or `resume_roles` depending on `caller_host`), Validate returns `PERMISSION_DENIED` (`blocked`). A block on one service does not deny the others. Bad sessions get `UNAUTHENTICATED`. Unknown `caller_host` is `PERMISSION_DENIED`.
+
+`ListUsers` authenticates like Validate, then requires a **service admin** for the caller host (`storage_roles=ADMIN` on storage, `resume_roles=ADMIN` on resume, hub `roles=ADMIN`). Non-admins get `PERMISSION_DENIED`. The RPC is read-only: it lists every user with the whitelist projection and does not return session ids or accept role writes. LAN gRPC stays unauthenticated at the transport layer.
 
 Regenerate stubs (requires `protoc`, `protoc-gen-go`, `protoc-gen-go-grpc`):
 
@@ -186,5 +188,7 @@ Vendored output lives in `pkg/authpb/` so other services can import `github.com/
 
 Postgres enums (extend with a new migration + `DEFAULT 'STRANGER'`):
 
-- `roles`: `ADMIN` \| `STRANGER`
-- `storage_roles`, `resume_roles`: `ADMIN` \| `FAMILY` \| `STRANGER`
+- `roles`: `ADMIN` \| `STRANGER` \| `BLOCKED`
+- `storage_roles`, `resume_roles`: `ADMIN` \| `FAMILY` \| `STRANGER` \| `BLOCKED`
+
+`BLOCKED` was added in migration `000002`. Restart the API so golang-migrate can apply it; editing an already-applied `000001` does not re-run.

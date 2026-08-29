@@ -116,7 +116,7 @@ func (m *Memory) UpdateRoles(_ context.Context, id uuid.UUID, patch RolePatch) (
 		return nil, ErrNotFound
 	}
 	demote := patch.Roles != nil && u.Roles == RoleAdmin && *patch.Roles != RoleAdmin
-	if demote && RemovesLastAdmin(m.countActiveAdminsLocked(), *u, true, false) {
+	if demote && RemovesLastAdmin(m.countActiveAdminsLocked(), *u, patch.Roles) {
 		return nil, ErrLastAdmin
 	}
 	if patch.Roles != nil {
@@ -128,21 +128,6 @@ func (m *Memory) UpdateRoles(_ context.Context, id uuid.UUID, patch RolePatch) (
 	if patch.ResumeRoles != nil {
 		u.ResumeRoles = *patch.ResumeRoles
 	}
-	u.UpdatedAt = time.Now().UTC()
-	return cloneUser(u), nil
-}
-
-func (m *Memory) SetBlocked(_ context.Context, id uuid.UUID, blocked bool) (*User, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	u, ok := m.byID[id]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	if blocked && !u.Blocked && RemovesLastAdmin(m.countActiveAdminsLocked(), *u, false, true) {
-		return nil, ErrLastAdmin
-	}
-	u.Blocked = blocked
 	u.UpdatedAt = time.Now().UTC()
 	return cloneUser(u), nil
 }
@@ -166,7 +151,7 @@ func (m *Memory) TouchLastSeen(_ context.Context, id uuid.UUID) error {
 func (m *Memory) countActiveAdminsLocked() int {
 	n := 0
 	for _, u := range m.byID {
-		if u.Roles == RoleAdmin && !u.Blocked {
+		if u.Roles == RoleAdmin {
 			n++
 		}
 	}

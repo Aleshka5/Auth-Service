@@ -73,10 +73,3 @@ export async function patchUser(id: string | number, patch: RolePatch): Promise<
     body: JSON.stringify(patch),
   })
 }
-
-export async function setUserBlocked(id: string | number, blocked: boolean): Promise<User | void> {
-  return request(`/api/admin/users/${id}/block`, {
-    method: 'POST',
-    body: JSON.stringify({ blocked }),
-  })
-}
