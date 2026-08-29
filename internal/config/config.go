@@ -1,8 +1,8 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -10,106 +10,171 @@ import (
 )
 
 type Config struct {
-	HTTPAddr       string
-	GRPCAddr       string
-	DatabaseURL    string
-	RedisURL       string
-	MigrationsPath string
+	HTTPAddr string
+	RedisURL string
 
-	AdminEmail string
+	UserServiceURL string
 
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 
 	CookieDomain string
-	CookieName   string
 	CookieSecure bool
-	SessionTTL   time.Duration
+
+	JWTSecret     string
+	JWTAccessTTL  time.Duration
+	JWTRefreshTTL time.Duration
 
 	DevHTTP      bool
 	PublicOrigin string
 
-	Whitelist map[string][]string
+	GatewayHosts  map[string][]string
+	GatewayConfig string
 }
 
-func Load() (*Config, error) {
-	ttl, err := parseDuration(env("SESSION_TTL", "168h"))
-	if err != nil {
-		return nil, fmt.Errorf("SESSION_TTL: %w", err)
-	}
-
+// LoadShared reads Redis/cookie/JWT env used by both the API and the gateway.
+// It does not require Google OAuth secrets.
+func LoadShared() (*Config, error) {
 	devHTTP := envBool("AUTH_DEV_HTTP", false)
 
+	accessTTL, err := parseDuration(env("JWT_ACCESS_TTL", "15m"))
+	if err != nil {
+		return nil, fmt.Errorf("JWT_ACCESS_TTL: %w", err)
+	}
+	refreshTTL, err := parseDuration(env("JWT_REFRESH_TTL", "168h"))
+	if err != nil {
+		return nil, fmt.Errorf("JWT_REFRESH_TTL: %w", err)
+	}
+
+	secret := os.Getenv("JWT_SECRET")
+	if len(secret) < 32 {
+		return nil, fmt.Errorf("JWT_SECRET is required and must be at least 32 bytes")
+	}
+
 	cfg := &Config{
-		HTTPAddr:           env("HTTP_ADDR", ":8080"),
-		GRPCAddr:           env("GRPC_ADDR", ":9090"),
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		RedisURL:           env("REDIS_URL", "redis://127.0.0.1:6379/0"),
-		MigrationsPath:     env("MIGRATIONS_PATH", "migrations"),
-		AdminEmail:         strings.ToLower(strings.TrimSpace(os.Getenv("ADMIN_EMAIL"))),
-		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
-		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
-		GoogleRedirectURL:  os.Getenv("GOOGLE_REDIRECT_URL"),
-		CookieDomain:       os.Getenv("COOKIE_DOMAIN"),
-		CookieName:         env("COOKIE_NAME", "auth_session"),
-		CookieSecure:       !devHTTP,
-		SessionTTL:         ttl,
-		DevHTTP:            devHTTP,
-		PublicOrigin:       strings.TrimRight(env("PUBLIC_ORIGIN", "https://filenkov.store"), "/"),
+		HTTPAddr:       env("HTTP_ADDR", ":8000"),
+		RedisURL:       env("REDIS_URL", "redis://127.0.0.1:6379/0"),
+		CookieDomain:   os.Getenv("COOKIE_DOMAIN"),
+		CookieSecure:   !devHTTP,
+		JWTSecret:      secret,
+		JWTAccessTTL:   accessTTL,
+		JWTRefreshTTL:  refreshTTL,
+		DevHTTP:        devHTTP,
+		PublicOrigin:   strings.TrimRight(env("PUBLIC_ORIGIN", "https://filenkov.store"), "/"),
+		GatewayConfig:  strings.TrimSpace(os.Getenv("GATEWAY_CONFIG")),
+		UserServiceURL: strings.TrimRight(env("USER_SERVICE_URL", "http://user_service:8000"), "/"),
 	}
 
 	if cfg.CookieDomain == "" && !devHTTP {
 		cfg.CookieDomain = ".filenkov.store"
 	}
+	return cfg, nil
+}
 
-	wl, err := parseWhitelist(os.Getenv("WHITELIST_JSON"))
+func Load() (*Config, error) {
+	cfg, err := LoadShared()
 	if err != nil {
 		return nil, err
 	}
-	if cfg.DevHTTP {
-		hub := append([]string{}, wl["filenkov.store"]...)
-		if len(hub) == 0 {
-			hub = []string{"google_email", "name", "roles"}
-		}
-		wl["localhost"] = hub
-		wl["127.0.0.1"] = hub
-	}
-	cfg.Whitelist = wl
 
-	if cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required")
-	}
+	cfg.GoogleClientID = os.Getenv("GOOGLE_CLIENT_ID")
+	cfg.GoogleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
+	cfg.GoogleRedirectURL = os.Getenv("GOOGLE_REDIRECT_URL")
+
 	if cfg.GoogleClientID == "" || cfg.GoogleClientSecret == "" || cfg.GoogleRedirectURL == "" {
 		return nil, fmt.Errorf("GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URL are required")
 	}
-	if cfg.AdminEmail == "" {
-		return nil, fmt.Errorf("ADMIN_EMAIL is required")
+	if cfg.UserServiceURL == "" {
+		return nil, fmt.Errorf("USER_SERVICE_URL is required")
 	}
 	return cfg, nil
 }
 
-func DefaultWhitelist() map[string][]string {
-	return map[string][]string{
-		"filenkov.store":         {"google_email", "name", "roles"},
-		"storage.filenkov.store": {"id", "google_email", "name", "storage_roles"},
-		"resume.filenkov.store":  {"name", "resume_roles"},
+// SetGatewayHosts replaces the OAuth return_to allowlist with gateway YAML hosts.
+func (c *Config) SetGatewayHosts(hosts []string) {
+	m := make(map[string][]string, len(hosts)+1)
+	for _, h := range hosts {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		m[h] = []string{}
 	}
+	if c.PublicOrigin != "" {
+		if origin := hostFromOrigin(c.PublicOrigin); origin != "" {
+			m[origin] = []string{}
+		}
+	}
+	c.GatewayHosts = m
 }
 
-func parseWhitelist(raw string) (map[string][]string, error) {
-	wl := DefaultWhitelist()
-	if strings.TrimSpace(raw) == "" {
-		return wl, nil
+// ReturnToAllowlist is the host map passed to oauth.ResolveReturnTo.
+// Gateway YAML hosts win when SetGatewayHosts was called; otherwise the public origin
+// (and loopback in AUTH_DEV_HTTP) is the allowlist.
+func (c *Config) ReturnToAllowlist() map[string][]string {
+	if c == nil {
+		return nil
 	}
-	var extra map[string][]string
-	if err := json.Unmarshal([]byte(raw), &extra); err != nil {
-		return nil, fmt.Errorf("WHITELIST_JSON: %w", err)
+	if len(c.GatewayHosts) > 0 {
+		return c.GatewayHosts
 	}
-	for host, fields := range extra {
-		wl[strings.ToLower(strings.TrimSpace(host))] = fields
+	m := map[string][]string{}
+	if origin := hostFromOrigin(c.PublicOrigin); origin != "" {
+		m[origin] = []string{}
 	}
-	return wl, nil
+	if c.DevHTTP {
+		m["localhost"] = []string{}
+		m["127.0.0.1"] = []string{}
+	}
+	return m
+}
+
+// JWTAudiences is the access/refresh JWT aud list: hub host, YAML hosts, and loopback in dev.
+func (c *Config) JWTAudiences() []string {
+	if c == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(h string) {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			return
+		}
+		if _, ok := seen[h]; ok {
+			return
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	add(hostFromOrigin(c.PublicOrigin))
+	for h := range c.GatewayHosts {
+		add(h)
+	}
+	if c.DevHTTP {
+		add("localhost")
+		add("127.0.0.1")
+	}
+	if len(out) == 0 {
+		add("filenkov.store")
+	}
+	return out
+}
+
+func hostFromOrigin(origin string) string {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		return ""
+	}
+	if !strings.Contains(origin, "://") {
+		origin = "https://" + origin
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 func env(key, fallback string) string {

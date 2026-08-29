@@ -1,24 +1,27 @@
 # Auth-Service
 
-Google OAuth2 hub for `filenkov.store`: one httpOnly session cookie on `.filenkov.store`, Postgres role enums, Redis sessions, and an internal gRPC `Validate` / `ListUsers` API for other LAN services.
+Google OAuth2 hub for `filenkov.store`: httpOnly **access + refresh JWTs** on `.filenkov.store`, a companion opaque **`auth_session`** cookie for product vaults, User-Service as the users directory, and an **Auth Gateway** that routes hosts/paths and injects identity headers.
 
-The browser never sees a token in the URL. Product backends (storage, resume, …) extract the `auth_session` cookie and call gRPC `Validate` on every request.
+The browser never sees a token in JS or the URL. **Caddy terminates TLS only.** The gateway is the public HTTP edge: routing, JWT auth, `X-Auth-*` / `X-User-Id` / `X-Storage-Role`, IP rate limits, security headers, and JSON access logs. Product backends sit behind the gateway and trust those headers. **User-Service never receives a JWT.**
+
+Auth has **no Postgres users DB and no gRPC**. Those were removed: edge sessions are not Redis cookies, `/api/admin` is gone, and new services must not call a Validate RPC. `auth_session` is **not** the login credential — it is a stable sid for WebStorage’s private vault.
 
 ## Layout
 
 ```
-cmd/api/          HTTP + gRPC process
-internal/         config, http, grpc, oauth, session, users, whitelist, ratelimit, log
-migrations/       golang-migrate SQL
-proto/            Validate + ListUsers service
-pkg/authpb/       generated Go stubs (import from other services)
-web/              Vite SPA (static nginx image)
-deploy/           docker-compose.yml, Dockerfiles
+cmd/api/          Internal auth API (OAuth, /api/me, /api/refresh, /api/logout, /health)
+cmd/gateway/      Public HTTP edge after Caddy (:8083)
+internal/         config, http, gateway, oauth, token, rejected, usersvc, ratelimit, log
+web/              Vite SPA (static nginx image, internal upstream)
+deploy/           docker-compose.yml, Dockerfiles, gateway.yaml
+docs/             auth-gateway.md, user-story-*.md (directory contract, storage host, admin directory list)
 ```
 
 ## Quick start (Docker Compose)
 
-1. Copy env and fill Google OAuth + admin email:
+Start the **User-Service** stack first so external network `user_network` and hostname `user_service` exist. Auth compose **attaches** that network; it does not create User-Service.
+
+1. Copy env and fill Google OAuth + `JWT_SECRET` (≥32 random bytes):
 
    ```bash
    cp .env.example .env
@@ -38,157 +41,197 @@ deploy/           docker-compose.yml, Dockerfiles
    GOOGLE_REDIRECT_URL=http://localhost/oauth/google/callback
    ```
 
+   Add `localhost` to `aliases` under `filenkov.store` in `deploy/gateway.yaml` if you browse via `http://localhost`.
+
 4. Run from the repo root:
 
    ```bash
    docker compose --env-file .env -f deploy/docker-compose.yml up --build
    ```
 
-   Compose publishes the API on `127.0.0.1:8082` and the SPA on `127.0.0.1:8081` (override with `API_HTTP_PORT` / `WEB_HTTP_PORT`). Point host Caddy at those ports (see below). gRPC (`:9090`) is **not** published; other containers should call `api:9090` on the compose network.
+   Networks: `auth_network` (created here) + `user_network` (`external: true`). Services: `redis` (`redis:7-alpine`), `web`, `api`, `gateway`.
 
-## Host Caddy (existing proxy)
+   Compose publishes **only** the gateway:
 
-Do **not** add a second `filenkov.store { }` site — Caddy will refuse a duplicate hostname. Insert these `handle` blocks **above** the existing catch-all `reverse_proxy` (or `handle`) for that site. `reverse_proxy` already sets `X-Forwarded-For` / `X-Forwarded-Proto`.
+   | Process | Host port | Notes |
+   |---------|-----------|--------|
+   | **gateway** | `127.0.0.1:8083` | Point production Caddy here. YAML listen `:8083`. |
+   | api | unpublished | Container `HTTP_ADDR=:8000` |
+   | web (SPA) | unpublished | Container `:80` |
+   | redis | unpublished | `rejected_cache` + OAuth state + rate limits + companion `session:{sid}` |
 
-```caddy
-# Extra: Auth-Service API (before the SPA catch-all)
-handle /oauth/* {
-	reverse_proxy 127.0.0.1:8082
-}
+   Gateway process health: `GET http://127.0.0.1:8083/healthz` (not the proxied `/health`). API healthcheck: `GET http://127.0.0.1:8000/health` inside the container (Redis ping).
 
-handle /api/* {
-	reverse_proxy 127.0.0.1:8082
-}
+If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail.
 
-handle /health {
-	reverse_proxy 127.0.0.1:8082
-}
-```
+Operator order: User-Service stack, Auth stack, Common (WebStorage data volumes), then WebStorage (`app` joins `auth_network` as external so `http://app:8000` resolves).
 
-Leave the existing catch-all pointing at the SPA (`127.0.0.1:8081` if this stack owns `/`):
+## Host Caddy (TLS only)
 
-```caddy
-handle {
-	reverse_proxy 127.0.0.1:8081
-}
-```
+Caddy keeps HTTP→HTTPS and Let’s Encrypt. It does **not** route `/oauth`, `/api`, SPA, `/users`, or `/hermes` — one reverse proxy to the gateway.
 
-If `filenkov.store` is a new site on this host, the full block is:
+Do **not** add a second `filenkov.store { }` site. Replace existing per-path `handle` blocks with:
 
 ```caddy
 filenkov.store {
 	encode gzip
+	reverse_proxy 127.0.0.1:8083
+}
 
-	handle /oauth/* {
-		reverse_proxy 127.0.0.1:8082
-	}
-
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8082
-	}
-
-	handle /health {
-		reverse_proxy 127.0.0.1:8082
-	}
-
-	handle {
-		reverse_proxy 127.0.0.1:8081
-	}
+storage.filenkov.store {
+	encode gzip
+	reverse_proxy 127.0.0.1:8083
 }
 ```
 
+If the hub site block already exists, delete `handle /oauth/*`, `handle /api/*`, `handle /health`, `handle /hermes/*`, and the SPA catch-all, then use the single `reverse_proxy` above.
+
 Reload with `sudo systemctl reload caddy` (or `caddy reload --config /etc/caddy/Caddyfile`).
+
+API (`:8000`) and web are **not** published on the host. There is no Caddy rollback to `:8081` / `:8082`. The storage Caddy site is operator config (not in this repo). WebStorage stays unpublished behind the gateway.
 
 ## Local Go (without Compose for the API)
 
-Run Postgres and Redis (or the compose `postgres` + `redis` services), then:
+Run Redis (or the compose `redis` service) and a reachable User-Service, then:
 
 ```bash
 export $(grep -v '^#' .env | xargs)
-export DATABASE_URL=postgres://auth:auth@127.0.0.1:5432/auth?sslmode=disable
 export REDIS_URL=redis://127.0.0.1:6379/0
-export MIGRATIONS_PATH=migrations
+export USER_SERVICE_URL=http://user_service:8000  # or a host URL if you port-forward User-Service; not Auth API
 go run ./cmd/api
 ```
 
-The Vite app (`web/`) can proxy `/api` and `/oauth` to `localhost:8080` during `npm run dev`.
+Do **not** set `DATABASE_URL`. Gateway (same Redis + `JWT_SECRET`; User-Service client only for storage-role lookups):
+
+```bash
+export GATEWAY_CONFIG=deploy/gateway.yaml
+export GATEWAY_HTTP_ADDR=:8083
+go run ./cmd/gateway
+```
+
+`web/vite.config.ts` proxies `/api`, `/oauth`, and `/users` to `http://127.0.0.1:8083` during `npm run dev`. Run the gateway on `:8083` (API stays on unpublished `:8000` behind it), or browse through the gateway directly.
+
+## Tests and builds
 
 ```bash
 go test ./...
 go build -o auth-service ./cmd/api
+go build -o auth-gateway ./cmd/gateway
 ```
 
-## HTTP API
+Frontend:
 
-JSON, same-origin (no CORS). Cookie: `auth_session`, `HttpOnly`, `SameSite=Lax`, `Secure` unless `AUTH_DEV_HTTP=true`, `Domain` from `COOKIE_DOMAIN` (default `.filenkov.store`).
+```bash
+cd web && npm test
+```
 
-| Method | Path | Auth | Notes |
-|--------|------|------|--------|
-| `GET` | `/oauth/google?return_to=` | — | CSRF state in Redis; `return_to` must be `https` and an exact whitelist host. With `AUTH_DEV_HTTP=true`, `http://localhost` and `http://127.0.0.1` are also allowed. |
-| `GET` | `/oauth/google/callback` | — | Upsert user, set cookie, 302 to `return_to` |
-| `POST` | `/api/logout` | cookie | Deletes Redis session, clears cookie |
-| `GET` | `/api/me` | cookie | `401` if anonymous, `403` if hub `roles=BLOCKED` |
-| `GET` | `/api/admin/users` | cookie + `roles=ADMIN` | `{ "users": [ ... ] }` |
-| `PATCH` | `/api/admin/users/:id` | admin | Optional `roles`, `storage_roles`, `resume_roles` (including `BLOCKED` for that service) |
-| `GET` | `/health` | — | Postgres + Redis ping |
+## HTTP API (Auth API, unpublished `:8000`)
 
-`GET /api/me` body:
+JSON, same-origin behind the gateway (no CORS). Cookies: `auth_access`, `auth_refresh`, and companion `auth_session`, `HttpOnly`, `SameSite=Lax`, `Secure` unless `AUTH_DEV_HTTP=true`, `Domain` from `COOKIE_DOMAIN` (default `.filenkov.store`).
+
+| Method | Path | Gateway auth | Notes |
+|--------|------|----------------|--------|
+| `GET` | `/oauth/google?return_to=` | public | CSRF state in Redis; `return_to` must be `https` and a host listed in `deploy/gateway.yaml` (plus `PUBLIC_ORIGIN`). With `AUTH_DEV_HTTP=true`, `http://localhost` and `http://127.0.0.1` are also allowed. |
+| `GET` | `/oauth/google/callback` | public | User-Service GET-by-`google_sub` or POST `/users`; if not `BLOCKED`, set JWT cookies **and** `auth_session`; 302 to `return_to` |
+| `POST` | `/api/refresh` | public | Reads `auth_refresh`; rotates refresh; keeps existing `auth_session` (extends Redis TTL) or mints one; `200` `{ "status": "ok" }` |
+| `POST` | `/api/logout` | public | Rejects jtis + user in Redis; deletes `session:{sid}`; clears JWT cookies and `auth_session`; `200` `{ "status": "ok" }` |
+| `GET` | `/api/me` | session | Access JWT required. Auth API re-validates, then calls User-Service. `401` if anonymous, `403` if `global_role=BLOCKED` |
+| `GET` | `/health` | public | Redis ping (no Postgres). Proxied to the API |
+| `GET` | `/healthz` | — | Gateway process liveness (not proxied; not a `filenkov.store` route) |
+
+There is **no** `/api/admin`. Directory reads/writes go through the gateway to User-Service (`GET`/`PUT /users/…`).
+
+`GET /api/me` body (Auth adapts User-Service JSON):
 
 ```json
 {
-  "id": "...",
-  "google_email": "...",
-  "name": "...",
-  "roles": "ADMIN",
-  "storage_roles": "STRANGER",
-  "resume_roles": "STRANGER",
-  "last_seen_at": "2026-08-13T12:00:00Z"
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "google_sub": "110000000000000000001",
+  "email": "ada@example.com",
+  "username": "ada",
+  "global_role": "ADMIN",
+  "services": [
+    { "service": "storage", "role": "FAMILY" },
+    { "service": "resume", "role": "STRANGER" }
+  ]
 }
 ```
 
-Signup is open to any Google account. New users get `STRANGER` on every role column. The first insert of `ADMIN_EMAIL` gets `roles=ADMIN`; later logins do not re-apply the env var. Demoting or setting `roles=BLOCKED` on the last active admin returns `409`.
+Signup is open to any Google account. Auth does not upsert into its own DB: it looks up `google_sub` in User-Service and `POST /users` on first login (derived `username`, not `google_sub`). First directory user is User-Service bootstrap `ADMIN`. Last-admin demotion is a User-Service `409 LAST_ADMIN`.
 
-IP rate limits (Redis): OAuth ~10/min, `/api/*` ~60/min.
+SPA: if `GET /api/me` returns `401`, `POST /api/refresh` then retry. Token strings stay in httpOnly cookies.
 
-## gRPC Validate (internal)
+IP rate limits: gateway (default 180/min, YAML) plus API defense in depth (OAuth ~10/min, `/api/*` ~60/min, Redis).
 
-Other services pass the session id (from the cookie) and their host:
+## JWT cookies and Redis `rejected_cache`
 
-```text
-rpc Validate(ValidateRequest) returns (ValidateResponse);
-rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
-```
+| Cookie | Name | TTL env | Default |
+|--------|------|---------|---------|
+| Access | `auth_access` | `JWT_ACCESS_TTL` | `15m` |
+| Refresh | `auth_refresh` | `JWT_REFRESH_TTL` | `168h` |
+| Companion sid | `auth_session` | `JWT_REFRESH_TTL` | `168h` |
 
-`ValidateRequest` / `ListUsersRequest`: `session_id`, `caller_host`  
-`ValidateResponse`: `map<string,string> fields` projected from the whitelist.  
-`ListUsersResponse`: `repeated ListUser users`, each with the same whitelist `fields` map as Validate for that host.
+Alg **HS256**. Access claims: `sub` (User-Service UUID), `jti`, `typ=access`, `global_role`, `email`, `username`, `iss`=`PUBLIC_ORIGIN`, `aud`=YAML hosts (hub + `storage.filenkov.store`, plus loopback when `AUTH_DEV_HTTP`). Refresh claims: `sub`, `jti`, `typ=refresh`, `iss`/`aud`/`exp` only (no roles). Rotation re-reads User-Service.
 
-| Host | Fields |
-|------|--------|
-| `filenkov.store` | `google_email`, `name`, `roles` |
-| `storage.filenkov.store` | `id`, `google_email`, `name`, `storage_roles` |
-| `resume.filenkov.store` | `name`, `resume_roles` |
+`auth_session` is a random 32-byte hex sid, **not** the access JWT and **not** the user UUID. Redis `session:{sid}` → User-Service UUID. Stable for the login lifetime (not rotated on access refresh). Edge auth ignores it.
 
-There is no LLM audience. If the caller's role column is `BLOCKED` (hub `roles`, `storage_roles`, or `resume_roles` depending on `caller_host`), Validate returns `PERMISSION_DENIED` (`blocked`). A block on one service does not deny the others. Bad sessions get `UNAUTHENTICATED`. Unknown `caller_host` is `PERMISSION_DENIED`.
+Redis keys:
 
-`ListUsers` authenticates like Validate, then requires a **service admin** for the caller host (`storage_roles=ADMIN` on storage, `resume_roles=ADMIN` on resume, hub `roles=ADMIN`). Non-admins get `PERMISSION_DENIED`. The RPC is read-only: it lists every user with the whitelist projection and does not return session ids or accept role writes. LAN gRPC stays unauthenticated at the transport layer.
+- `rejected:jti:{jti}` — logout and refresh rotation
+- `rejected:user:{uuid}` — logout and successful admin role PUTs (gateway writes this for the **target** user after `200` on `PUT /users/{id}/role` or `PUT /users/{id}/roles/{service}`)
+- `session:{sid}` / `session:user:{uuid}` — companion vault sid (cleared on logout and user revocation)
 
-Regenerate stubs (requires `protoc`, `protoc-gen-go`, `protoc-gen-go-grpc`):
+OAuth CSRF remains `oauth:state:{state}`.
 
-```bash
-protoc -I proto \
-  --go_out=pkg/authpb --go_opt=paths=source_relative \
-  --go-grpc_out=pkg/authpb --go-grpc_opt=paths=source_relative \
-  proto/auth.proto
-```
+## Identity headers (gateway → upstream)
 
-Vendored output lives in `pkg/authpb/` so other services can import `github.com/aleshka5/auth-service/pkg/authpb`.
+The gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` so clients cannot spoof identity.
+
+**Non–User-Service** upstreams, when an access JWT is valid:
+
+| Header | Value |
+|--------|--------|
+| `X-Auth-User-Id` | JWT `sub` (User-Service UUID) |
+| `X-Auth-Email` | JWT `email` |
+| `X-Auth-Name` | JWT `username` (User-Service has no display-name field) |
+| `X-Auth-Role` | JWT `global_role` (hub YAML `role_field: global_role`) |
+
+**Storage host** (`storage.filenkov.store`, `role_field: storage`) also sets `X-User-Id` (same UUID) and `X-Storage-Role` from User-Service `GET /users/{id}/roles/storage`. Cookie is forwarded. User-Service errors → 503 (or 401 if the user is gone).
+
+**User-Service** upstream: strip `Cookie` and `Authorization`; set `X-User-Id` from JWT `sub`. Do not send JWTs.
+
+`/hermes/*` is admin-only at the edge; the `/hermes` prefix is stripped before proxying to Hermes (`host.docker.internal:8787`).
+
+## Admin (SPA → gateway → User-Service)
+
+Hub `ADMIN` only (`/admin` is `auth: admin`). The admin page loads the directory once and shows the full table (no pagination). Email search is client-side only. There is no UUID paste and no `/api/admin`.
+
+- `GET /users` — list (`{ "users": [ … ] }` with persisted `services` per item). Gateway policy **`admin`**. Missing services render as `STRANGER` in the SPA.
+- `PUT /users/{id}/role` body `{ "role": "FAMILY" }` — instant apply on select.
+- `PUT /users/{id}/roles/{service}` body `{ "role": "FAMILY" }` — `storage`, `resume`, and any other persisted service keys on the loaded rows.
+
+The SPA does not send `X-User-Id` (the gateway overwrites it). User-Service error envelope `{ "error": { "code", "message" } }` is proxied unchanged (`409 LAST_ADMIN` included). Self-edit is allowed. Spec + what shipped: [docs/user-story-admin-directory.md](docs/user-story-admin-directory.md).
+
+Tests: `go test ./...` (`TestHubUsersListAdminOnly`, `TestHubUsersListProxiesWithXUserId`) and `cd web && npm test` (`Admin.test.tsx`, `api.test.ts` `fetchUsers`).
 
 ## Roles
 
-Postgres enums (extend with a new migration + `DEFAULT 'STRANGER'`):
+Canonical enum in User-Service: `ADMIN` \| `FAMILY` \| `STRANGER` \| `BLOCKED`.
 
-- `roles`: `ADMIN` \| `STRANGER` \| `BLOCKED`
-- `storage_roles`, `resume_roles`: `ADMIN` \| `FAMILY` \| `STRANGER` \| `BLOCKED`
+Hub edge auth uses access-JWT `global_role`. Per-service roles are User-Service `{service}` keys (`storage`, `resume`), not Auth DB columns.
 
-`BLOCKED` was added in migration `000002`. Restart the API so golang-migrate can apply it; editing an already-applied `000001` does not re-run.
+## Gateway routing
+
+YAML: `deploy/gateway.yaml`. First matching route wins. Hosts: `filenkov.store` (hub) and `storage.filenkov.store` (one upstream `http://app:8000`, `/health` public, 30m proxy timeout). Hub `role_field` is `global_role`. `GET /users` (exact) is `auth: admin` → User-Service. `POST /users` and `/users/by-google-sub/*` are `auth: reject` (404 at the gateway). `/users/*` proxies to User-Service (`auth: session`: valid access JWT required). Full schema and Caddy notes: [docs/auth-gateway.md](docs/auth-gateway.md).
+
+## What was removed
+
+| Removed | Replacement |
+|---------|-------------|
+| Redis session cookie as **edge** credential | `auth_access` + `auth_refresh` JWTs (companion `auth_session` is vault-only) |
+| Auth Postgres `users`, `DATABASE_URL`, golang-migrate | User-Service directory |
+| gRPC `Validate` / `ListUsers`, `proto/`, `GRPC_ADDR` | Gateway `X-Auth-*` (and `X-User-Id` for User-Service) |
+| `WHITELIST_JSON` as product contract | Gateway YAML hosts for `return_to` |
+| `GET`/`PATCH /api/admin/users` | Gateway proxy `GET`/`PUT /users/…` |
+| Published host ports `8081` (web) and `8082` (API) | Only `127.0.0.1:8083` |
+| `ADMIN_EMAIL` bootstrap | User-Service first-user `ADMIN` |

@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setError(null)
     } catch (err) {
       setUser(null)
-      setError(err instanceof Error ? err.message : 'Could not load session')
+      setError(err instanceof Error ? err.message : 'Could not load sign-in')
     } finally {
       setLoading(false)
     }

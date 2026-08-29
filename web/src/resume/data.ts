@@ -66,20 +66,20 @@ export const stackTree: TreeItem[] = [
   {
     id: 'stack-backend',
     title: 'Backend',
-    summary: 'APIs other services can trust: sessions, roles, and queues.',
+    summary: 'APIs other services can trust: identity, roles, and queues.',
     chips: ['Python', 'FastAPI', 'Go'],
     children: [
       {
         id: 'stack-data',
         title: 'Data & buses',
-        summary: 'Postgres for truth, Redis for sessions and limits, Kafka or RabbitMQ when work is async.',
+        summary: 'Postgres for truth, Redis for token rejection and limits, Kafka or RabbitMQ when work is async.',
         chips: ['PostgreSQL', 'Redis', 'Kafka', 'RabbitMQ'],
       },
       {
         id: 'stack-auth-impl',
         title: 'Auth contracts',
-        summary: 'Google OAuth2, httpOnly cookie on .filenkov.store, gRPC Validate for every product host.',
-        chips: ['OAuth2', 'gRPC', 'JWT session'],
+        summary: 'Google OAuth2, httpOnly access and refresh cookies on .filenkov.store, Auth Gateway injects X-Auth-* headers.',
+        chips: ['OAuth2', 'JWT cookies'],
       },
     ],
   },
@@ -92,7 +92,7 @@ export const stackTree: TreeItem[] = [
       {
         id: 'stack-edge',
         title: 'Edge & identity',
-        summary: 'Caddy terminates HTTPS with Let’s Encrypt. DNS points every subdomain at the same gate.',
+        summary: 'Caddy terminates HTTPS with Let’s Encrypt. The Auth Gateway routes hosts and paths behind it.',
         chips: ['Let’s Encrypt', 'DNS'],
       },
       {
@@ -111,20 +111,20 @@ export const projectTree = (showHermes: boolean): TreeItem[] => {
       id: 'proj-auth',
       title: 'Auth hub',
       meta: 'filenkov.store',
-      summary: 'One Google sign-in. Other Filenkov sites ask this hub who you are — no tokens in the URL.',
+      summary: 'One Google sign-in. The Auth Gateway sits in front of Filenkov hosts — no tokens in the URL.',
       children: [
         {
           id: 'proj-auth-cookie',
-          title: 'Session on the cookie',
-          summary: 'httpOnly auth_session on .filenkov.store. Products call gRPC Validate with the session id.',
-          chips: ['Go', 'gRPC', 'Redis'],
+          title: 'JWT cookies',
+          summary: 'httpOnly auth_access and auth_refresh on .filenkov.store. The gateway injects X-Auth-* on proxied requests.',
+          chips: ['Go', 'Redis'],
           children: [
             {
               id: 'proj-auth-roles',
-              title: 'Whitelist & roles',
+              title: 'Hub and service roles',
               summary:
-                'Each host gets a field projection. New accounts start as STRANGER. BLOCKED is per service, not global.',
-              chips: ['Postgres enums', 'Rate limit by IP'],
+                'User-Service holds global_role and per-service roles. New Google logins start as STRANGER. BLOCKED on a service does not lock the hub.',
+              chips: ['ADMIN / FAMILY / STRANGER / BLOCKED', 'Rate limit by IP'],
             },
           ],
         },
@@ -140,7 +140,7 @@ export const projectTree = (showHermes: boolean): TreeItem[] => {
         {
           id: 'proj-storage-roles',
           title: 'Family-aware access',
-          summary: 'ADMIN, FAMILY, STRANGER, or BLOCKED on storage_roles only.',
+          summary: 'ADMIN, FAMILY, STRANGER, or BLOCKED on the storage service only.',
           chips: ['FastAPI', 'Postgres', 'MinIO'],
         },
       ],
@@ -155,7 +155,7 @@ export const projectTree = (showHermes: boolean): TreeItem[] => {
         {
           id: 'proj-llm-gate',
           title: 'Auth at the edge',
-          summary: 'Caddy + /auth/validate. The model stack stays off the public role list until it needs one.',
+          summary: 'Identity at the edge. The model stack stays off the public role list until it needs one.',
         },
       ],
     },
@@ -175,7 +175,7 @@ export const projectTree = (showHermes: boolean): TreeItem[] => {
               id: 'proj-resume-store',
               title: 'Files & identity',
               summary: 'Postgres for chats, MinIO for knowledge and PDFs, Google through this hub.',
-              chips: ['Postgres', 'MinIO', 'gRPC Validate'],
+              chips: ['Postgres', 'MinIO', 'X-Auth-*'],
             },
           ],
         },
@@ -282,23 +282,23 @@ export const architectureSolutions: ArchitectureSolution[] = [
   {
     slug: 'auth-gateway',
     title: 'Auth Gateway',
-    summary: 'Google OAuth2 hub at filenkov.store/auth. Issues the cookie every other service trusts.',
+    summary: 'Google OAuth2 hub at filenkov.store/auth. Caddy terminates TLS; this gateway routes and injects identity.',
     href: '/auth',
   },
   {
     slug: 'caddy-https',
     title: 'Caddy HTTPS',
-    summary: 'TLS at the edge with Let’s Encrypt. One reverse proxy for auth, SPA, and product hosts.',
+    summary: 'TLS at the edge with Let’s Encrypt. Reverse-proxies every host to this service’s gateway.',
   },
   {
     slug: 'auth-db',
-    title: 'Auth DB',
-    summary: 'Postgres users and per-service role enums. Source of truth for Validate projections.',
+    title: 'User-Service',
+    summary: 'Directory of people (UUID, google_sub, username, roles). Auth has no Postgres. Gateway X-Auth-Role is the access-JWT global_role.',
   },
   {
     slug: 'auth-cache',
     title: 'Auth Cache',
-    summary: 'Redis sessions, OAuth state, IP rate limits, and the redirect whitelist.',
+    summary: 'Redis rejected tokens, OAuth state, and IP rate limits.',
   },
   {
     slug: 'role-manager',
@@ -308,13 +308,13 @@ export const architectureSolutions: ArchitectureSolution[] = [
   {
     slug: 'storage',
     title: 'Storage',
-    summary: 'Home file cloud. Validates through gRPC, stores blobs on the shared MinIO.',
+    summary: 'Home file cloud. Sits behind the gateway and trusts X-Auth-* headers; blobs on shared MinIO.',
     href: 'https://storage.filenkov.store',
   },
   {
     slug: 'llm',
     title: 'LLM',
-    summary: 'Personal model workspace. Same cookie, own database, auth at /auth/validate.',
+    summary: 'Personal model workspace. Same cookie, own database, identity injected at the edge.',
     href: 'https://llm.filenkov.store',
   },
   {

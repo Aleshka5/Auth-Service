@@ -1,3 +1,0 @@
-ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT FALSE;
-UPDATE users SET blocked = TRUE WHERE roles = 'BLOCKED';
-CREATE INDEX IF NOT EXISTS users_blocked_idx ON users (blocked);

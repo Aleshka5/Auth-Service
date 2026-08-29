@@ -1,77 +1,141 @@
-import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import { Navigate } from 'react-router-dom'
-import { fetchAdminUsers, patchUser } from '../api'
+import { fetchUsers, putGlobalRole, putServiceRole } from '../api'
 import { useAuth } from '../auth'
 import {
   isAdmin,
   isBlockedRole,
   SERVICE_ROLES,
   SITE_ROLES,
+  serviceRole,
+  withGlobalRole,
+  withServiceRole,
+  type Role,
   type ServiceRole,
-  type SiteRole,
   type User,
 } from '../types'
 
-function formatSeen(iso: string | null): string {
-  if (!iso) return 'Never'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(d)
+const FIXED_SERVICES = ['storage', 'resume'] as const
+
+function roleFor(user: User, field: 'global' | string): Role {
+  if (field === 'global') return user.global_role
+  return serviceRole(user, field)
+}
+
+function extraServiceKeys(users: User[]): string[] {
+  const seen = new Set<string>()
+  for (const person of users) {
+    for (const row of person.services ?? []) {
+      if (!(FIXED_SERVICES as readonly string[]).includes(row.service)) {
+        seen.add(row.service)
+      }
+    }
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b))
+}
+
+function titleService(service: string): string {
+  if (!service) return service
+  return service.charAt(0).toUpperCase() + service.slice(1)
+}
+
+function RoleSelect({
+  user,
+  field,
+  label,
+  roles,
+  disabled,
+  onChange,
+}: {
+  user: User
+  field: 'global' | string
+  label: string
+  roles: readonly Role[]
+  disabled: boolean
+  onChange: (userId: string, field: 'global' | string, value: Role) => void
+}) {
+  const value = roleFor(user, field)
+  return (
+    <select
+      aria-label={label}
+      className={isBlockedRole(value) ? 'status-blocked' : undefined}
+      value={value}
+      disabled={disabled}
+      onChange={(e: ChangeEvent<HTMLSelectElement>) =>
+        onChange(user.id, field, e.target.value as Role)
+      }
+    >
+      {roles.map((r) => (
+        <option key={r} value={r}>
+          {r}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 export function Admin() {
   const { user, loading } = useAuth()
-  const [users, setUsers] = useState<User[]>([])
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [ready, setReady] = useState(false)
-
-  const load = useCallback(async () => {
-    setError(null)
-    try {
-      setUsers(await fetchAdminUsers())
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load users')
-    } finally {
-      setReady(true)
-    }
-  }, [])
+  const [people, setPeople] = useState<User[]>([])
+  const [emailQuery, setEmailQuery] = useState('')
+  const [listState, setListState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (!loading && isAdmin(user)) void load()
-  }, [loading, user, load])
+    if (loading || !isAdmin(user)) return
+    let cancelled = false
+    setListState('loading')
+    setLoadError(null)
+    fetchUsers()
+      .then((list) => {
+        if (cancelled) return
+        setPeople(list)
+        setListState('ready')
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setPeople([])
+        setLoadError(err instanceof Error ? err.message : 'Could not load directory')
+        setListState('error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [loading, user])
+
+  const extras = useMemo(() => extraServiceKeys(people), [people])
+  const filtered = useMemo(() => {
+    const q = emailQuery.trim().toLowerCase()
+    if (!q) return people
+    return people.filter((person) => person.email.toLowerCase().includes(q))
+  }, [people, emailQuery])
 
   if (loading) {
-    return <p className="muted">Checking session…</p>
+    return <p className="muted">Checking sign-in…</p>
   }
   if (!isAdmin(user)) {
     return <Navigate to="/" replace />
   }
 
-  async function onRoleChange(id: string | number, field: 'roles', value: SiteRole): Promise<void>
-  async function onRoleChange(
-    id: string | number,
-    field: 'storage_roles' | 'resume_roles',
-    value: ServiceRole,
-  ): Promise<void>
-  async function onRoleChange(
-    id: string | number,
-    field: 'roles' | 'storage_roles' | 'resume_roles',
-    value: SiteRole | ServiceRole,
-  ) {
-    const key = String(id)
-    setBusyId(key)
-    setError(null)
+  async function onRoleChange(userId: string, field: 'global' | string, value: Role): Promise<void> {
+    setBusy(true)
+    setActionError(null)
     try {
-      await patchUser(id, { [field]: value })
-      await load()
+      if (field === 'global') {
+        await putGlobalRole(userId, value)
+        setPeople((prev) => prev.map((person) => (person.id === userId ? withGlobalRole(person, value) : person)))
+      } else {
+        await putServiceRole(userId, field, value as ServiceRole)
+        setPeople((prev) =>
+          prev.map((person) => (person.id === userId ? withServiceRole(person, field, value as ServiceRole) : person)),
+        )
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not update role')
+      setActionError(err instanceof Error ? err.message : 'Could not update role')
     } finally {
-      setBusyId(null)
+      setBusy(false)
     }
   }
 
@@ -80,94 +144,104 @@ export function Admin() {
       <div className="admin-head">
         <div>
           <p className="kicker">Admin</p>
-          <h1>Registered people</h1>
+          <h1>Directory</h1>
         </div>
-        <p className="muted">{users.length} account{users.length === 1 ? '' : 's'}</p>
       </div>
-      {error ? <div className="banner error">{error}</div> : null}
-      <div className="table-wrap">
-        {!ready ? (
-          <p className="empty">Loading users…</p>
-        ) : users.length === 0 ? (
-          <p className="empty">No accounts yet.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Status</th>
-                <th>Roles</th>
-                <th>Storage roles</th>
-                <th>Resume roles</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((row) => {
-                const busy = busyId === String(row.id)
-                return (
-                  <tr key={String(row.id)}>
-                    <td>{row.name}</td>
-                    <td>{row.google_email}</td>
-                    <td>{formatSeen(row.last_seen_at)}</td>
-                    <td>
-                      <select
-                        aria-label={`Site role for ${row.name}`}
-                        className={isBlockedRole(row.roles) ? 'status-blocked' : undefined}
-                        value={row.roles}
-                        disabled={busy}
-                        onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                          void onRoleChange(row.id, 'roles', e.target.value as SiteRole)
-                        }
-                      >
-                        {SITE_ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <select
-                        aria-label={`Storage role for ${row.name}`}
-                        className={isBlockedRole(row.storage_roles) ? 'status-blocked' : undefined}
-                        value={row.storage_roles}
-                        disabled={busy}
-                        onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                          void onRoleChange(row.id, 'storage_roles', e.target.value as ServiceRole)
-                        }
-                      >
-                        {SERVICE_ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <select
-                        aria-label={`Resume role for ${row.name}`}
-                        className={isBlockedRole(row.resume_roles) ? 'status-blocked' : undefined}
-                        value={row.resume_roles}
-                        disabled={busy}
-                        onChange={(e: ChangeEvent<HTMLSelectElement>) =>
-                          void onRoleChange(row.id, 'resume_roles', e.target.value as ServiceRole)
-                        }
-                      >
-                        {SERVICE_ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
+      <p className="muted admin-lead">Everyone on the hub. Change a role and it applies immediately.</p>
+      {actionError ? <div className="banner error">{actionError}</div> : null}
+      {listState === 'loading' ? <p className="empty">Loading directory…</p> : null}
+      {listState === 'error' ? (
+        <div className="banner error">{loadError ?? 'Could not load directory'}</div>
+      ) : null}
+      {listState === 'ready' ? (
+        <>
+          <div className="admin-search">
+            <label htmlFor="user-email">Email</label>
+            <input
+              id="user-email"
+              name="user-email"
+              type="search"
+              value={emailQuery}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Filter by email"
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setEmailQuery(e.target.value)}
+            />
+          </div>
+          <div className="table-wrap">
+            {people.length === 0 ? (
+              <p className="empty">No one is in the directory yet.</p>
+            ) : filtered.length === 0 ? (
+              <p className="empty">No one matches that email.</p>
+            ) : (
+              <table aria-label="Directory">
+                <thead>
+                  <tr>
+                    <th>Username</th>
+                    <th>Email</th>
+                    <th>Global role</th>
+                    <th>Storage</th>
+                    <th>Resume</th>
+                    {extras.map((service) => (
+                      <th key={service}>{titleService(service)}</th>
+                    ))}
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+                </thead>
+                <tbody>
+                  {filtered.map((person) => (
+                    <tr key={person.id}>
+                      <td>{person.username}</td>
+                      <td>{person.email}</td>
+                      <td>
+                        <RoleSelect
+                          user={person}
+                          field="global"
+                          label={`Site role for ${person.username}`}
+                          roles={SITE_ROLES}
+                          disabled={busy}
+                          onChange={onRoleChange}
+                        />
+                      </td>
+                      <td>
+                        <RoleSelect
+                          user={person}
+                          field="storage"
+                          label={`Storage role for ${person.username}`}
+                          roles={SERVICE_ROLES}
+                          disabled={busy}
+                          onChange={onRoleChange}
+                        />
+                      </td>
+                      <td>
+                        <RoleSelect
+                          user={person}
+                          field="resume"
+                          label={`Resume role for ${person.username}`}
+                          roles={SERVICE_ROLES}
+                          disabled={busy}
+                          onChange={onRoleChange}
+                        />
+                      </td>
+                      {extras.map((service) => (
+                        <td key={service}>
+                          <RoleSelect
+                            user={person}
+                            field={service}
+                            label={`${titleService(service)} role for ${person.username}`}
+                            roles={SERVICE_ROLES}
+                            disabled={busy}
+                            onChange={onRoleChange}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      ) : null}
     </>
   )
 }

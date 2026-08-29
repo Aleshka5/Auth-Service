@@ -728,6 +728,35 @@ button:disabled {
   margin-bottom: 1.5rem;
 }
 
+.admin-lead {
+  margin: -0.5rem 0 1.25rem;
+}
+
+.admin-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.admin-search label {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.admin-search input {
+  flex: 1 1 18rem;
+  min-width: 12rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+}
+
 .empty {
   padding: 2rem 1rem;
   text-align: center;

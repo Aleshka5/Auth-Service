@@ -2,47 +2,51 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/aleshka5/auth-service/internal/config"
 	"github.com/aleshka5/auth-service/internal/oauth"
 	"github.com/aleshka5/auth-service/internal/ratelimit"
-	"github.com/aleshka5/auth-service/internal/session"
-	"github.com/aleshka5/auth-service/internal/users"
-	"github.com/google/uuid"
+	"github.com/aleshka5/auth-service/internal/rejected"
+	"github.com/aleshka5/auth-service/internal/sid"
+	"github.com/aleshka5/auth-service/internal/token"
+	"github.com/aleshka5/auth-service/internal/usersvc"
 )
 
 type Server struct {
 	cfg       *config.Config
-	users     users.Repository
-	sessions  *session.Store
+	tokens    *token.Service
+	rejected  *rejected.Cache
+	users     *usersvc.Client
 	oauth     oauth.Exchanger
 	limiter   *ratelimit.Limiter
-	pingDB    func() error
 	pingRedis func() error
+	sessions  *sid.Store
 }
 
 func New(
 	cfg *config.Config,
-	usersStore users.Repository,
-	sessions *session.Store,
+	tokens *token.Service,
+	rej *rejected.Cache,
+	users *usersvc.Client,
 	oauthSvc oauth.Exchanger,
 	limiter *ratelimit.Limiter,
-	pingDB func() error,
 	pingRedis func() error,
+	sessions *sid.Store,
 ) *Server {
 	return &Server{
 		cfg:       cfg,
-		users:     usersStore,
-		sessions:  sessions,
+		tokens:    tokens,
+		rejected:  rej,
+		users:     users,
 		oauth:     oauthSvc,
 		limiter:   limiter,
-		pingDB:    pingDB,
 		pingRedis: pingRedis,
+		sessions:  sessions,
 	}
 }
 
@@ -55,9 +59,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /oauth/google", oauthLim(http.HandlerFunc(s.handleOAuthStart)))
 	mux.Handle("GET /oauth/google/callback", oauthLim(http.HandlerFunc(s.handleOAuthCallback)))
 	mux.Handle("POST /api/logout", apiLim(http.HandlerFunc(s.handleLogout)))
+	mux.Handle("POST /api/refresh", apiLim(http.HandlerFunc(s.handleRefresh)))
 	mux.Handle("GET /api/me", apiLim(http.HandlerFunc(s.handleMe)))
-	mux.Handle("GET /api/admin/users", apiLim(s.requireAdmin(s.handleAdminList)))
-	mux.Handle("PATCH /api/admin/users/{id}", apiLim(s.requireAdmin(s.handleAdminPatch)))
 
 	return mux
 }
@@ -82,60 +85,24 @@ func (s *Server) limit(bucket string, n int) func(http.Handler) http.Handler {
 	}
 }
 
-func (s *Server) requireAdmin(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, _, ok := s.currentUser(w, r, true)
-		if !ok {
-			return
-		}
-		if u.Roles != users.RoleAdmin {
-			writeError(w, http.StatusForbidden, "forbidden")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func (s *Server) setAuthCookies(w http.ResponseWriter, access, refresh string) {
+	http.SetCookie(w, s.cookie(token.CookieAccess, access, int(s.tokens.AccessTTL().Seconds())))
+	http.SetCookie(w, s.cookie(token.CookieRefresh, refresh, int(s.tokens.RefreshTTL().Seconds())))
 }
 
-func (s *Server) currentUser(w http.ResponseWriter, r *http.Request, touch bool) (*users.User, string, bool) {
-	c, err := r.Cookie(s.cfg.CookieName)
-	if err != nil || c.Value == "" {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, "", false
-	}
-	uid, err := s.sessions.Get(r.Context(), c.Value)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, "", false
-	}
-	u, err := s.users.GetByID(r.Context(), uid)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return nil, "", false
-	}
-	if u.Roles == users.RoleBlocked {
-		writeError(w, http.StatusForbidden, "blocked")
-		return nil, "", false
-	}
-	if touch {
-		_ = s.sessions.Touch(r.Context(), c.Value)
-		_ = s.users.TouchLastSeen(r.Context(), u.ID)
-		s.setSessionCookie(w, c.Value)
-	}
-	return u, c.Value, true
+func (s *Server) clearAuthCookies(w http.ResponseWriter) {
+	http.SetCookie(w, s.cookie(token.CookieAccess, "", -1))
+	http.SetCookie(w, s.cookie(token.CookieRefresh, "", -1))
+	http.SetCookie(w, s.cookie(sid.CookieName, "", -1))
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, sid string) {
-	http.SetCookie(w, s.cookie(sid, int(s.cfg.SessionTTL.Seconds())))
+func (s *Server) setSessionCookie(w http.ResponseWriter, value string) {
+	http.SetCookie(w, s.cookie(sid.CookieName, value, int(s.tokens.RefreshTTL().Seconds())))
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
-	c := s.cookie("", -1)
-	http.SetCookie(w, c)
-}
-
-func (s *Server) cookie(value string, maxAge int) *http.Cookie {
+func (s *Server) cookie(name, value string, maxAge int) *http.Cookie {
 	c := &http.Cookie{
-		Name:     s.cfg.CookieName,
+		Name:     name,
 		Value:    value,
 		Path:     "/",
 		MaxAge:   maxAge,
@@ -149,30 +116,55 @@ func (s *Server) cookie(value string, maxAge int) *http.Cookie {
 	return c
 }
 
-type userJSON struct {
-	ID           string  `json:"id"`
-	GoogleEmail  string  `json:"google_email"`
-	Name         string  `json:"name"`
-	Roles        string  `json:"roles"`
-	StorageRoles string  `json:"storage_roles"`
-	ResumeRoles  string  `json:"resume_roles"`
-	LastSeenAt   *string `json:"last_seen_at"`
+func (s *Server) parseAccess(r *http.Request) (*token.AccessClaims, error) {
+	c, err := r.Cookie(token.CookieAccess)
+	if err != nil || c.Value == "" {
+		return nil, token.ErrInvalid
+	}
+	claims, err := s.tokens.ParseAccess(c.Value)
+	if err != nil {
+		return nil, err
+	}
+	if s.rejected != nil {
+		ok, err := s.rejected.IsRejected(r.Context(), claims.JTI(), claims.Sub(), claims.IssuedAtTime())
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return nil, token.ErrInvalid
+		}
+	}
+	return claims, nil
 }
 
-func toUserJSON(u *users.User) userJSON {
-	out := userJSON{
-		ID:           u.ID.String(),
-		GoogleEmail:  u.GoogleEmail,
-		Name:         u.Name,
-		Roles:        string(u.Roles),
-		StorageRoles: string(u.StorageRoles),
-		ResumeRoles:  string(u.ResumeRoles),
+func (s *Server) parseRefresh(r *http.Request) (*token.RefreshClaims, error) {
+	c, err := r.Cookie(token.CookieRefresh)
+	if err != nil || c.Value == "" {
+		return nil, token.ErrInvalid
 	}
-	if u.LastSeenAt != nil {
-		s := u.LastSeenAt.UTC().Format(time.RFC3339)
-		out.LastSeenAt = &s
+	claims, err := s.tokens.ParseRefresh(c.Value)
+	if err != nil {
+		return nil, err
 	}
-	return out
+	if s.rejected != nil {
+		ok, err := s.rejected.IsRejected(r.Context(), claims.JTI(), claims.Sub(), claims.IssuedAtTime())
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return nil, token.ErrInvalid
+		}
+	}
+	return claims, nil
+}
+
+type meJSON struct {
+	ID         string                `json:"id"`
+	GoogleSub  string                `json:"google_sub"`
+	Email      string                `json:"email"`
+	Username   string                `json:"username"`
+	GlobalRole string                `json:"global_role"`
+	Services   []usersvc.ServiceRole `json:"services"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -200,6 +192,6 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-func parseID(raw string) (uuid.UUID, error) {
-	return uuid.Parse(raw)
+func isUnauthorized(err error) bool {
+	return errors.Is(err, token.ErrInvalid) || errors.Is(err, token.ErrExpired) || errors.Is(err, token.ErrType)
 }

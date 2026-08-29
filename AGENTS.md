@@ -1,54 +1,63 @@
-# This is Go based web service with Google OAuth2 + JWT
+# Auth-Service: Google OAuth2 + JWT cookies + Auth Gateway
 
-## Backend
-We use best practicies for Go development.
+Go service for Filenkov hosts. Best practices for Go apply.
 
-Must implement Role System for this service and for any other.
-This service Roles:
-1) Admin
-2) User
-(Not Hardcode it, make it extandable)
+## Identity
 
-White list verified redirect servicies. When any other web page redirect here to get auth we must check returned_to filed using configured white list like: storage.filenkov.store, llm.filenkov.store, filenkov.store ect
-{
-    "storage.filenkov.store": (name, storage_roles)
-    "resume.filenkov.store": (name, resume_roles)
-    "llm.filenkov.store": (name, llm_roles)
-    "filenkov.store": (google_email, name, roles)
-}
-key - valid url
-() - list of available db user fields to get
+- Google OAuth2 only. Edge credentials are two httpOnly cookies: `auth_access` and `auth_refresh` (HS256 JWTs). Not `localStorage` / `Authorization` for the SPA.
+- Companion httpOnly cookie `auth_session` is an opaque sid for product vaults (WebStorage Redis `private_key:{sid}`). The gateway does **not** authorize on it. Missing `auth_session` must not block proxy.
+- Cookie domain `.filenkov.store`, `SameSite=Lax`, `Secure` in production (`AUTH_DEV_HTTP=true` clears Secure and the domain).
+- `JWT_SECRET` (≥32 bytes) is shared by **Gateway and Auth API only**. Never send JWTs to User-Service.
 
-Must implement Rate Limit Gate by ip
+## Directory (User-Service)
 
-### Logging
-Service must log every important step with json capable format to use loki in the future.
+- **User-Service is the source of truth** for people: UUID `id`, `google_sub`, `email`, `username`, `global_role`, per-service roles.
+- Auth has **no Postgres users DB**, no migrations, no `ADMIN_EMAIL`, no Auth-side role columns. Do not reintroduce them.
+- Auth API looks up or creates the person over HTTP (`USER_SERVICE_URL`, compose hostname `user_service:8000` on external `user_network`). JWT `sub` is the User-Service UUID.
+- Do not reintroduce gRPC `Validate` / `ListUsers`, `WHITELIST_JSON`, or `/api/admin`.
 
-### DB
-Users Table like
-id | google_email | name | roles | storage_roles | ...
+## Roles
 
-use Enums for every roles column
+User-Service enum (exact strings): `ADMIN` | `FAMILY` | `STRANGER` | `BLOCKED`. Hub identity at the edge is access-JWT `global_role`. Per-service roles live in User-Service under keys such as `storage` and `resume` — not Auth table columns. First User-Service user becomes `ADMIN`; later Google logins start as `STRANGER`. `BLOCKED` on a service does not lock the hub.
 
-### Redis Cache
-For fast Auth purposes, Rate Limitting, storring white list
+## Auth Gateway
 
-### API
-Make all oauth standart API Endpoints
-+ This service will be used as auth service for other servicies so it must implement validate other connections for example.
+- **Caddy** terminates TLS (Let’s Encrypt, HTTP→HTTPS only). It reverse-proxies to this gateway. It does not choose `/oauth` vs SPA vs Hermes vs `/users`.
+- **Gateway** (`cmd/gateway`) is the public HTTP edge (`:8083`): YAML host/path routing, access-JWT + `rejected_cache`, identity headers, IP rate limits, security headers, JSON access logs.
+- **API** (`cmd/api`) stays **internal** (`:8000`, unpublished): OAuth, `/api/me`, `/api/refresh`, `/api/logout`, `/health`. The Vite SPA stays a separate nginx container (internal upstream). Do not merge the SPA into a Go binary. Do not publish API or web ports.
 
+Routing is YAML (`deploy/gateway.yaml`). Live hosts: `filenkov.store` and `storage.filenkov.store`. Adding a host is a config change, not a code change. First matching route wins — put specific prefixes first. See `docs/auth-gateway.md`.
 
-## Frontend
-Prefere Vite framework
-For prod version it must be builded static FS site.
+Edge policy: no valid access JWT, or `global_role == BLOCKED` / user in `rejected_cache`, is not proxied (except `auth: public`). Browser navigations redirect to `{PUBLIC_ORIGIN}/auth?return_to=…`; `/api/*`, `/users/*`, exact `/users`, and typical XHR get `401` JSON; BLOCKED with a token gets `403`. Hub main page, `/auth`, `/architecture`, SPA assets, `/oauth/*`, `/api/refresh`, `/api/logout`, and `/health` are public. `/admin`, `/hermes/*`, and `GET /users` are admin-only (`global_role == ADMIN`). `/api/me` requires an access JWT. `POST /users` is rejected.
 
-1) Auth page (filenkov.store/auth) . Only google OAuth2 authentication with user info request then.
-2) Main page (filenkov.store). Available without auth, but Have some UI flags for auth users - SignIn button for unknown user, Show Name for known user.
-Page with some links and About section. One page with header and footer.
-Links should place there: llm.filenkov.store, storage.filenkov.store and filenkov.store/hermes/ - only for admin
-3) Admin page (filenkov.store/admin). Admin authenticated user only available. Contains List of registered users with their roles.
-Admin can change each service role, including BLOCKED for that service only.
-User name | Email | Status (Last activity date time)
-roles [] (ADMIN | STRANGER | BLOCKED)
-storage roles [] (ADMIN | FAMILY | STRANGER | BLOCKED)
-...
+On proxied requests the gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role`.
+
+- **Non–User-Service** upstreams (`api`, `web`, `hermes`, …): inject `X-Auth-User-Id`, `X-Auth-Email`, `X-Auth-Name` (username), `X-Auth-Role` (access JWT `global_role`). Product services sit **behind the gateway** and trust those headers.
+- **Storage host** (`role_field: storage`): also inject `X-User-Id` (JWT `sub`) and `X-Storage-Role` from User-Service `GET /users/{id}/roles/storage` (not `global_role`). Forward `Cookie` so `auth_session` reaches WebStorage. User-Service 5xx/timeout → 503, no proxy; user 404 → 401.
+- **User-Service** upstream: do **not** forward `Cookie`, `Authorization`, or JWT query params. Set `X-User-Id` from the access JWT `sub`. User-Service never sees a JWT.
+
+`return_to` allowlist is the set of hosts in the gateway YAML (https in production). Do not add `WHITELIST_JSON`.
+
+Do not reintroduce Auth Postgres lookup in the gateway, or gRPC as the product contract for new services. Redis `session:{sid}` exists only as the companion `auth_session` map (UUID, refresh TTL) — not as the edge credential.
+
+## Rate limit
+
+IP rate limit at the **gateway**. Keep API limits as defense in depth.
+
+## Logging
+
+JSON-capable (`slog` JSON) including gateway access logs, for Loki later.
+
+## Redis
+
+`redis:7-alpine`: `rejected_cache` (`rejected:jti:{jti}`, `rejected:user:{uuid}`), OAuth CSRF state, IP rate-limit counters, and companion `session:{sid}` → User-Service UUID (plus `session:user:{uuid}` reverse index) for `auth_session`. **Not** an edge session store.
+
+## Frontend (Vite, production static)
+
+1. Auth page (`filenkov.store/auth`) — Google OAuth2.
+2. Main page (`filenkov.store`) — public. Sign in vs **username**. Links: llm.filenkov.store, storage.filenkov.store, and `filenkov.store/hermes/` (admin only).
+3. Admin page (`filenkov.store/admin`) — hub `global_role == ADMIN` only. Directory table from User-Service `GET /users` (full list, email search in the SPA), then `PUT /users/{id}/role` and `PUT /users/{id}/roles/{service}`. Gateway exposes `GET /users` as `auth: admin`; `POST /users` stays rejected. Do not call `/api/admin`. Shipped behavior: `docs/user-story-admin-directory.md`.
+
+SPA: `credentials: 'include'`; on `401` from `/api/me` (and other same-origin calls), `POST /api/refresh` then retry. Display `username` / `email` / `global_role` / `services[]`.
+
+Hub and storage roles in the UI: `ADMIN` | `FAMILY` | `STRANGER` | `BLOCKED`.

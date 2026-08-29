@@ -56,7 +56,3 @@ func isLoopback(host string) bool {
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
-
-func AllowedHosts(entries map[string][]string) map[string][]string {
-	return entries
-}

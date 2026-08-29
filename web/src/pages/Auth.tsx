@@ -26,14 +26,14 @@ export function Auth() {
         <h1 style={{ fontSize: '2.1rem' }}>Google only.</h1>
         <p className="muted">
           This hub does not keep passwords. Continue with the Google account you want on Filenkov
-          services.
+          services. Sign-in sets httpOnly access and refresh cookies — the page never sees the JWTs.
         </p>
         {loading ? (
-          <p className="muted">Checking session…</p>
+          <p className="muted">Checking sign-in…</p>
         ) : user ? (
           <>
             <p>
-              You are already signed in as <strong>{user.name}</strong>.
+              You are already signed in as <strong>{user.username}</strong>.
             </p>
             {returnTo ? (
               <a className="btn" href={href}>

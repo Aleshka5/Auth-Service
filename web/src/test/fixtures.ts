@@ -3,20 +3,24 @@ import type { User } from '../types'
 
 export const stranger: User = {
   id: '11111111-1111-1111-1111-111111111111',
-  google_email: 'ann@example.com',
-  name: 'Ann',
-  roles: 'STRANGER',
-  storage_roles: 'FAMILY',
-  resume_roles: 'STRANGER',
-  last_seen_at: '2026-08-13T12:00:00Z',
+  google_sub: '110000000000000000001',
+  email: 'ann@example.com',
+  username: 'Ann',
+  global_role: 'STRANGER',
+  services: [{ service: 'storage', role: 'FAMILY' }],
 }
 
 export const admin: User = {
   ...stranger,
   id: '22222222-2222-2222-2222-222222222222',
-  google_email: 'boss@example.com',
-  name: 'Boss',
-  roles: 'ADMIN',
+  google_sub: '110000000000000000002',
+  email: 'boss@example.com',
+  username: 'Boss',
+  global_role: 'ADMIN',
+  services: [
+    { service: 'storage', role: 'FAMILY' },
+    { service: 'resume', role: 'STRANGER' },
+  ],
 }
 
 export function jsonResponse(data: unknown, status = 200): Response {
@@ -24,6 +28,10 @@ export function jsonResponse(data: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+export function userServiceError(code: string, message: string, status: number): Response {
+  return jsonResponse({ error: { code, message } }, status)
 }
 
 export function mockFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {

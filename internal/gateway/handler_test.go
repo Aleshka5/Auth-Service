@@ -1,0 +1,1028 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/aleshka5/auth-service/internal/config"
+	"github.com/aleshka5/auth-service/internal/ratelimit"
+	"github.com/aleshka5/auth-service/internal/rejected"
+	"github.com/aleshka5/auth-service/internal/sid"
+	"github.com/aleshka5/auth-service/internal/token"
+	"github.com/aleshka5/auth-service/internal/usersvc"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+)
+
+type probe struct {
+	method        string
+	path          string
+	host          string
+	rawQuery      string
+	authID        string
+	authEmail     string
+	authName      string
+	authRole      string
+	storageRole   string
+	userID        string
+	cookie        string
+	authorization string
+	spoofedLeft   string
+	forwardedHost string
+}
+
+func newUpstream(t *testing.T) (*httptest.Server, *probe) {
+	t.Helper()
+	p := &probe{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.method = r.Method
+		p.path = r.URL.Path
+		p.host = r.Host
+		p.rawQuery = r.URL.RawQuery
+		p.authID = r.Header.Get("X-Auth-User-Id")
+		p.authEmail = r.Header.Get("X-Auth-Email")
+		p.authName = r.Header.Get("X-Auth-Name")
+		p.authRole = r.Header.Get("X-Auth-Role")
+		p.storageRole = r.Header.Get("X-Storage-Role")
+		p.userID = r.Header.Get("X-User-Id")
+		p.cookie = r.Header.Get("Cookie")
+		p.authorization = r.Header.Get("Authorization")
+		p.spoofedLeft = r.Header.Get("X-Auth-Spoof")
+		p.forwardedHost = r.Header.Get("X-Forwarded-Host")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, p
+}
+
+func yamlFor(product, userSvc string) []byte {
+	return []byte(`
+listen: ":0"
+public_origin: "https://filenkov.store"
+rate_limit:
+  requests_per_minute: 10000
+upstreams:
+  api: "` + product + `"
+  web: "` + product + `"
+  hermes: "` + product + `"
+  user_service: "` + userSvc + `"
+hosts:
+  filenkov.store:
+    role_field: global_role
+    routes:
+      - match: /oauth/*
+        upstream: api
+        auth: public
+      - match: /api/refresh
+        upstream: api
+        auth: public
+      - match: /api/logout
+        upstream: api
+        auth: public
+      - match: /api/me
+        upstream: api
+        auth: session
+      - match: /api/*
+        upstream: api
+        auth: session
+      - match: /users/by-google-sub/*
+        auth: reject
+      - match: /users
+        methods: [POST]
+        auth: reject
+      - match: /users
+        methods: [GET]
+        upstream: user_service
+        auth: admin
+        preserve_host: false
+      - match: /users/*
+        upstream: user_service
+        auth: session
+        preserve_host: false
+      - match: /health
+        upstream: api
+        auth: public
+      - match: /hermes/*
+        upstream: hermes
+        auth: admin
+        strip_prefix: /hermes
+      - match: /admin
+        upstream: web
+        auth: admin
+      - match: /admin/*
+        upstream: web
+        auth: admin
+      - match: /*
+        upstream: web
+        auth: public
+`)
+}
+
+type gwHarness struct {
+	t        *testing.T
+	h        http.Handler
+	tok      *token.Service
+	rej      *rejected.Cache
+	sessions *sid.Store
+	up       *probe
+	users    *probe
+	secret   []byte
+}
+
+func testToken(t *testing.T, secret []byte, accessTTL time.Duration) *token.Service {
+	t.Helper()
+	s, err := token.New(token.Config{
+		Secret:     secret,
+		Issuer:     "https://filenkov.store",
+		Audiences:  []string{"filenkov.store", "localhost"},
+		AccessTTL:  accessTTL,
+		RefreshTTL: 168 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func newGW(t *testing.T) *gwHarness {
+	t.Helper()
+	product, productProbe := newUpstream(t)
+	userSvc, userProbe := newUpstream(t)
+	file, err := Parse(yamlFor(product.URL, userSvc.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		CookieSecure: false,
+		PublicOrigin: "https://filenkov.store",
+		DevHTTP:      true,
+	}
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	secret := []byte("test-secret-key-32-bytes-long!!!")
+	tok := testToken(t, secret, 15*time.Minute)
+	rej := rejected.New(rdb)
+	sessions := sid.New(rdb)
+	s, err := New(cfg, file, tok, rej, ratelimit.New(rdb), nil, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &gwHarness{t: t, h: s.Handler(), tok: tok, rej: rej, sessions: sessions, up: productProbe, users: userProbe, secret: secret}
+}
+
+func (hr *gwHarness) do(req *http.Request) *httptest.ResponseRecorder {
+	if req.Host == "" {
+		req.Host = "filenkov.store"
+	}
+	rec := httptest.NewRecorder()
+	hr.h.ServeHTTP(rec, req)
+	return rec
+}
+
+func (hr *gwHarness) login(email, username, role string) (sub, raw string) {
+	hr.t.Helper()
+	sub = uuid.NewString()
+	raw, _, err := hr.tok.IssueAccess(sub, email, username, role)
+	if err != nil {
+		hr.t.Fatal(err)
+	}
+	return sub, raw
+}
+
+func req(method, path string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	r.Host = "filenkov.store"
+	return r
+}
+
+func withAccess(r *http.Request, raw string) *http.Request {
+	r.AddCookie(&http.Cookie{Name: token.CookieAccess, Value: raw})
+	return r
+}
+
+func TestHealthzNotProxied(t *testing.T) {
+	hr := newGW(t)
+	rec := hr.do(req(http.MethodGet, "/healthz"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	if hr.up.path != "" {
+		t.Fatalf("healthz must not hit upstream, path=%q", hr.up.path)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["status"] != "ok" {
+		t.Fatalf("body %s", rec.Body.String())
+	}
+}
+
+func TestAnonymousPublicOK(t *testing.T) {
+	hr := newGW(t)
+	rec := hr.do(req(http.MethodGet, "/"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.up.path != "/" {
+		t.Fatalf("upstream path %q", hr.up.path)
+	}
+	if hr.up.authEmail != "" || hr.up.authID != "" {
+		t.Fatalf("anonymous must not inject identity: %+v", hr.up)
+	}
+}
+
+func TestPublicOAuthAndRefreshWithoutJWT(t *testing.T) {
+	hr := newGW(t)
+	rec := hr.do(req(http.MethodGet, "/oauth/google"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("oauth status %d", rec.Code)
+	}
+	rec = hr.do(req(http.MethodPost, "/api/refresh"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh status %d", rec.Code)
+	}
+	rec = hr.do(req(http.MethodPost, "/api/logout"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("logout status %d", rec.Code)
+	}
+}
+
+func TestAnonymousSessionRedirectVs401(t *testing.T) {
+	hr := newGW(t)
+
+	rec := hr.do(req(http.MethodGet, "/admin"))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("html admin status %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "https://filenkov.store/auth?return_to=") {
+		t.Fatalf("location %q", loc)
+	}
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := u.Query().Get("return_to")
+	if rt != "https://filenkov.store/admin" {
+		t.Fatalf("return_to %q", rt)
+	}
+
+	api := req(http.MethodGet, "/api/me")
+	rec = hr.do(api)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/api/me status %d", rec.Code)
+	}
+
+	xhr := req(http.MethodGet, "/admin")
+	xhr.Header.Set("X-Requested-With", "XMLHttpRequest")
+	rec = hr.do(xhr)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("xhr status %d", rec.Code)
+	}
+
+	js := req(http.MethodGet, "/hermes/x")
+	js.Header.Set("Accept", "application/json")
+	rec = hr.do(js)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("json accept status %d", rec.Code)
+	}
+
+	users := req(http.MethodGet, "/users/"+uuid.NewString())
+	rec = hr.do(users)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/users 401 status %d", rec.Code)
+	}
+}
+
+func TestMissingInvalidExpiredRejectedJWT(t *testing.T) {
+	hr := newGW(t)
+
+	rec := hr.do(req(http.MethodGet, "/api/me"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("missing: %d", rec.Code)
+	}
+
+	rec = hr.do(withAccess(req(http.MethodGet, "/api/me"), "not-a-jwt"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid: %d", rec.Code)
+	}
+
+	expiredAt := time.Now().Add(-time.Hour)
+	expiredClaims := token.AccessClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   uuid.NewString(),
+			ID:        uuid.NewString(),
+			Issuer:    "https://filenkov.store",
+			Audience:  jwt.ClaimStrings{"filenkov.store"},
+			IssuedAt:  jwt.NewNumericDate(expiredAt),
+			NotBefore: jwt.NewNumericDate(expiredAt),
+			ExpiresAt: jwt.NewNumericDate(expiredAt.Add(time.Minute)),
+		},
+		Typ:        token.TypAccess,
+		Email:      "e@x.c",
+		Username:   "exp",
+		GlobalRole: "STRANGER",
+	}
+	expired, err := jwt.NewWithClaims(jwt.SigningMethodHS256, expiredClaims).SignedString(hr.secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/api/me"), expired))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expired: %d %s", rec.Code, rec.Body.String())
+	}
+
+	other, err := token.New(token.Config{
+		Secret:     []byte("other-secret-key-32-bytes-long!!!"),
+		Issuer:     "https://filenkov.store",
+		Audiences:  []string{"filenkov.store"},
+		AccessTTL:  time.Minute,
+		RefreshTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered, _, err := other.IssueAccess(uuid.NewString(), "e@x.c", "x", "ADMIN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/api/me"), tampered))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("tampered: %d", rec.Code)
+	}
+
+	_, raw := hr.login("ann@b.c", "ann", "STRANGER")
+	parsed, err := hr.tok.ParseAccess(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hr.rej.RejectJTI(context.Background(), parsed.JTI(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/api/me"), raw))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("rejected jti want 401, got %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.up.path != "" {
+		t.Fatalf("rejected jti must not proxy, path=%q", hr.up.path)
+	}
+
+	sub, raw := hr.login("bob@b.c", "bob", "STRANGER")
+	if err := hr.rej.RejectUser(context.Background(), sub, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/api/me"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("rejected user want 403, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOpenRedirectUnknownHost(t *testing.T) {
+	hr := newGW(t)
+	r := req(http.MethodGet, "/admin")
+	r.Host = "evil.example"
+	rec := hr.do(r)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Fatalf("must not redirect, got %q", loc)
+	}
+}
+
+func TestStrangerForbiddenOnAdminRoutes(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("ann@b.c", "ann", "STRANGER")
+
+	rec := hr.do(withAccess(req(http.MethodGet, "/hermes/"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("hermes status %d %s", rec.Code, rec.Body.String())
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/admin"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("admin status %d", rec.Code)
+	}
+	if hr.up.path != "" {
+		t.Fatalf("must not proxy, upstream path %q", hr.up.path)
+	}
+
+	rec = hr.do(withAccess(req(http.MethodGet, "/api/me"), raw))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("session /api/me %d", rec.Code)
+	}
+}
+
+func TestValidJWTInjectsIdentity(t *testing.T) {
+	hr := newGW(t)
+	sub, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	rec := hr.do(withAccess(req(http.MethodGet, "/hermes/panel"), raw))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.up.path != "/panel" {
+		t.Fatalf("strip_prefix: upstream saw %q", hr.up.path)
+	}
+	if hr.up.host != "filenkov.store" {
+		t.Fatalf("preserve Host: got %q", hr.up.host)
+	}
+	if hr.up.authEmail != "boss@b.c" || hr.up.authName != "boss" || hr.up.authRole != "ADMIN" {
+		t.Fatalf("identity %+v", hr.up)
+	}
+	if hr.up.authID != sub {
+		t.Fatalf("user id %q want %q", hr.up.authID, sub)
+	}
+}
+
+func TestBlockedForbiddenOnSessionRoutes(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("b@b.c", "blocked", "BLOCKED")
+	rec := hr.do(withAccess(req(http.MethodGet, "/api/me"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/admin"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("admin status %d", rec.Code)
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public home should still work for BLOCKED, %d", rec.Code)
+	}
+}
+
+func TestStripSpoofedAuthHeaders(t *testing.T) {
+	hr := newGW(t)
+	sub, raw := hr.login("ann@b.c", "ann", "STRANGER")
+	r := withAccess(req(http.MethodGet, "/api/me"), raw)
+	r.Header.Set("X-Auth-User-Id", "spoof-id")
+	r.Header.Set("X-Auth-Email", "evil@example.com")
+	r.Header.Set("X-Auth-Role", "ADMIN")
+	r.Header.Set("X-Auth-Spoof", "yes")
+	r.Header.Set("X-User-Id", "spoof-user")
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if hr.up.authEmail != "ann@b.c" || hr.up.authRole != "STRANGER" || hr.up.authName != "ann" {
+		t.Fatalf("injected %+v", hr.up)
+	}
+	if hr.up.authID != sub || hr.up.authID == "spoof-id" {
+		t.Fatalf("spoofed id survived: %+v", hr.up)
+	}
+	if hr.up.spoofedLeft != "" {
+		t.Fatal("X-Auth-Spoof should be stripped")
+	}
+	if hr.up.userID != "" {
+		t.Fatalf("product upstream must not get X-User-Id, got %q", hr.up.userID)
+	}
+}
+
+func TestUserServiceProxySetsXUserIdStripsJWT(t *testing.T) {
+	hr := newGW(t)
+	sub, raw := hr.login("ada@example.com", "ada", "ADMIN")
+	id := uuid.NewString()
+	r := withAccess(req(http.MethodGet, "/users/"+id), raw)
+	r.Header.Set("Authorization", "Bearer "+raw)
+	r.Header.Set("X-User-Id", "client-spoof")
+	q := r.URL.Query()
+	q.Set("access_token", raw)
+	q.Set("keep", "1")
+	r.URL.RawQuery = q.Encode()
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.users.path != "/users/"+id {
+		t.Fatalf("path %q", hr.users.path)
+	}
+	if hr.users.userID != sub {
+		t.Fatalf("X-User-Id %q want %q", hr.users.userID, sub)
+	}
+	if hr.users.cookie != "" {
+		t.Fatalf("cookie forwarded: %q", hr.users.cookie)
+	}
+	if hr.users.authorization != "" {
+		t.Fatalf("Authorization forwarded: %q", hr.users.authorization)
+	}
+	if hr.users.authID != "" || hr.users.authRole != "" {
+		t.Fatalf("X-Auth-* must not go to User-Service: %+v", hr.users)
+	}
+	vals, _ := url.ParseQuery(hr.users.rawQuery)
+	if vals.Get("access_token") != "" {
+		t.Fatalf("jwt query forwarded: %q", hr.users.rawQuery)
+	}
+	if vals.Get("keep") != "1" {
+		t.Fatalf("non-jwt query dropped: %q", hr.users.rawQuery)
+	}
+	if hr.up.path != "" {
+		t.Fatalf("must not hit product upstream, path=%q", hr.up.path)
+	}
+}
+
+func TestUserServiceCreateAndGoogleSubRejected(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("ada@example.com", "ada", "ADMIN")
+
+	rec := hr.do(withAccess(req(http.MethodPost, "/users"), raw))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("POST /users %d", rec.Code)
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/users/by-google-sub/11001"), raw))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("by-google-sub %d", rec.Code)
+	}
+	if hr.users.path != "" {
+		t.Fatalf("rejected paths must not proxy, path=%q", hr.users.path)
+	}
+}
+
+func TestUserServicePutRejectsTargetUser(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	target := uuid.NewString()
+	sidVal, err := hr.sessions.Create(context.Background(), target, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := hr.do(withAccess(req(http.MethodPut, "/users/"+target+"/role"), raw))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	ok, err := hr.rej.IsRejected(context.Background(), "", target, time.Now().Add(-time.Second))
+	if err != nil || !ok {
+		t.Fatalf("target user must be rejected after PUT: ok=%v err=%v", ok, err)
+	}
+	if _, err := hr.sessions.Get(context.Background(), sidVal); err == nil {
+		t.Fatal("companion session must be deleted on rejected:user:")
+	}
+}
+
+func TestUnknownHost404(t *testing.T) {
+	hr := newGW(t)
+	r := req(http.MethodGet, "/")
+	r.Host = "llm.filenkov.store"
+	rec := hr.do(r)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d", rec.Code)
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	hr := newGW(t)
+	rec := hr.do(req(http.MethodGet, "/healthz"))
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("headers %v", rec.Header())
+	}
+}
+
+func TestPreserveHostDefault(t *testing.T) {
+	hr := newGW(t)
+	rec := hr.do(req(http.MethodGet, "/health"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if hr.up.host != "filenkov.store" {
+		t.Fatalf("Host %q", hr.up.host)
+	}
+	if hr.up.path != "/health" {
+		t.Fatalf("path %q", hr.up.path)
+	}
+}
+
+func TestTargetUserID(t *testing.T) {
+	id := "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+	if got := targetUserID("/users/" + id + "/role"); got != id {
+		t.Fatalf("role %q", got)
+	}
+	if got := targetUserID("/users/" + id + "/roles/storage"); got != id {
+		t.Fatalf("service %q", got)
+	}
+	if got := targetUserID("/users/" + id); got != "" {
+		t.Fatalf("get %q", got)
+	}
+	if got := targetUserID("/users/not-a-uuid/role"); got != "" {
+		t.Fatalf("bad uuid %q", got)
+	}
+}
+
+func yamlWithStorage(product, userSvc, storage string) []byte {
+	return []byte(`
+listen: ":0"
+public_origin: "https://filenkov.store"
+rate_limit:
+  requests_per_minute: 10000
+timeouts:
+  proxy: 60s
+upstreams:
+  api: "` + product + `"
+  web: "` + product + `"
+  hermes: "` + product + `"
+  user_service: "` + userSvc + `"
+  storage: "` + storage + `"
+hosts:
+  filenkov.store:
+    role_field: global_role
+    routes:
+      - match: /users
+        methods: [POST]
+        auth: reject
+      - match: /users
+        methods: [GET]
+        upstream: user_service
+        auth: admin
+        preserve_host: false
+      - match: /users/*
+        upstream: user_service
+        auth: session
+        preserve_host: false
+      - match: /*
+        upstream: web
+        auth: public
+  storage.filenkov.store:
+    role_field: storage
+    timeouts:
+      proxy: 30m
+    routes:
+      - match: /health
+        upstream: storage
+        auth: public
+      - match: /*
+        upstream: storage
+        auth: session
+`)
+}
+
+type storageRoleMock struct {
+	mu     sync.Mutex
+	role   map[string]string
+	fail   map[string]int
+	calls  int
+	lastID string
+	cookie string
+	authz  string
+}
+
+func newStorageRoleMock() *storageRoleMock {
+	return &storageRoleMock{role: map[string]string{}, fail: map[string]int{}}
+}
+
+func (m *storageRoleMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	m.mu.Lock()
+	m.calls++
+	m.cookie = r.Header.Get("Cookie")
+	m.authz = r.Header.Get("Authorization")
+	m.mu.Unlock()
+
+	const prefix = "/users/"
+	const suffix = "/roles/storage"
+	if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, prefix) || !strings.HasSuffix(r.URL.Path, suffix) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "NOT_FOUND", "message": "nope"}})
+		return
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), suffix)
+	m.mu.Lock()
+	m.lastID = id
+	fail := m.fail[id]
+	role := m.role[id]
+	m.mu.Unlock()
+	if fail != 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(fail)
+		code := "INTERNAL_ERROR"
+		if fail == http.StatusNotFound {
+			code = "NOT_FOUND"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": "forced"}})
+		return
+	}
+	if role == "" {
+		role = "STRANGER"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"user_id": id, "service": "storage", "role": role})
+}
+
+type storageHarness struct {
+	*gwHarness
+	storage *probe
+	roles   *storageRoleMock
+}
+
+func newStorageGW(t *testing.T) *storageHarness {
+	t.Helper()
+	product, productProbe := newUpstream(t)
+	storage, storageProbe := newUpstream(t)
+	roles := newStorageRoleMock()
+	roleSrv := httptest.NewServer(roles)
+	t.Cleanup(roleSrv.Close)
+	file, err := Parse(yamlWithStorage(product.URL, roleSrv.URL, storage.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		CookieSecure: false,
+		PublicOrigin: "https://filenkov.store",
+		DevHTTP:      true,
+	}
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	secret := []byte("test-secret-key-32-bytes-long!!!")
+	tok := testToken(t, secret, 15*time.Minute)
+	users, err := usersvc.New(roleSrv.URL, roleSrv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rej := rejected.New(rdb)
+	sessions := sid.New(rdb)
+	s, err := New(cfg, file, tok, rej, ratelimit.New(rdb), users, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &storageHarness{
+		gwHarness: &gwHarness{t: t, h: s.Handler(), tok: tok, rej: rej, sessions: sessions, up: productProbe, users: productProbe, secret: secret},
+		storage:   storageProbe,
+		roles:     roles,
+	}
+}
+
+func storageReq(method, path string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	r.Host = "storage.filenkov.store"
+	return r
+}
+
+func TestStorageHealthPublic(t *testing.T) {
+	hr := newStorageGW(t)
+	rec := hr.do(storageReq(http.MethodGet, "/health"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.storage.path != "/health" {
+		t.Fatalf("path %q", hr.storage.path)
+	}
+	if hr.roles.calls != 0 {
+		t.Fatalf("anonymous /health must not call User-Service, calls=%d", hr.roles.calls)
+	}
+}
+
+func TestStorageAnonymousRedirectVs401(t *testing.T) {
+	hr := newStorageGW(t)
+	rec := hr.do(storageReq(http.MethodGet, "/"))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("html status %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, "/auth?return_to=") {
+		t.Fatalf("location %q", loc)
+	}
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Query().Get("return_to") != "https://storage.filenkov.store/" {
+		t.Fatalf("return_to %q", u.Query().Get("return_to"))
+	}
+	if hr.storage.path != "" {
+		t.Fatal("must not proxy")
+	}
+
+	xhr := storageReq(http.MethodGet, "/")
+	xhr.Header.Set("X-Requested-With", "XMLHttpRequest")
+	rec = hr.do(xhr)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("xhr %d", rec.Code)
+	}
+
+	api := storageReq(http.MethodGet, "/api/files")
+	rec = hr.do(api)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/api %d", rec.Code)
+	}
+}
+
+func TestStorageInjectsHeadersAndForwardsCookie(t *testing.T) {
+	hr := newStorageGW(t)
+	sub, raw := hr.login("ada@example.com", "ada", "ADMIN")
+	hr.roles.role[sub] = "FAMILY"
+	r := withAccess(storageReq(http.MethodGet, "/vault"), raw)
+	r.AddCookie(&http.Cookie{Name: sid.CookieName, Value: "keep-me-please-not-a-real-sid-but-long-enough"})
+	r.Header.Set("X-Auth-Role", "spoof-global")
+	r.Header.Set("X-User-Id", "spoof-user")
+	r.Header.Set("X-Storage-Role", "ADMIN")
+	r.Header.Set("X-Auth-Email", "evil@example.com")
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.storage.path != "/vault" {
+		t.Fatalf("path %q", hr.storage.path)
+	}
+	if hr.storage.authID != sub || hr.storage.authEmail != "ada@example.com" || hr.storage.authName != "ada" {
+		t.Fatalf("x-auth %+v", hr.storage)
+	}
+	if hr.storage.authRole != "ADMIN" {
+		t.Fatalf("X-Auth-Role must stay hub global_role, got %q", hr.storage.authRole)
+	}
+	if hr.storage.userID != sub {
+		t.Fatalf("X-User-Id %q want %q", hr.storage.userID, sub)
+	}
+	if hr.storage.storageRole != "FAMILY" {
+		t.Fatalf("X-Storage-Role %q want FAMILY (not global_role)", hr.storage.storageRole)
+	}
+	if !strings.Contains(hr.storage.cookie, sid.CookieName) {
+		t.Fatalf("storage must receive auth_session cookie, got %q", hr.storage.cookie)
+	}
+	if hr.roles.cookie != "" || hr.roles.authz != "" {
+		t.Fatalf("User-Service role GET leaked credentials cookie=%q auth=%q", hr.roles.cookie, hr.roles.authz)
+	}
+	if hr.up.path != "" && hr.up.path == hr.storage.path && hr.up.storageRole != "" {
+		// product probe is distinct; hub must not have been the storage target
+	}
+}
+
+func TestStorageRoleLookupFailure(t *testing.T) {
+	hr := newStorageGW(t)
+	sub, raw := hr.login("ada@example.com", "ada", "FAMILY")
+	hr.roles.fail[sub] = http.StatusInternalServerError
+	rec := hr.do(withAccess(storageReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("5xx lookup: %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.storage.path != "" {
+		t.Fatal("must not proxy on User-Service 5xx")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] != "unavailable" {
+		t.Fatalf("body %s", rec.Body.String())
+	}
+
+	hr.roles.fail[sub] = http.StatusNotFound
+	rec = hr.do(withAccess(storageReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("404 user: %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.storage.path != "" {
+		t.Fatal("must not proxy on missing user")
+	}
+}
+
+func TestStorageBlockedHubRoleForbidden(t *testing.T) {
+	hr := newStorageGW(t)
+	_, raw := hr.login("b@b.c", "blocked", "BLOCKED")
+	rec := hr.do(withAccess(storageReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if hr.storage.path != "" {
+		t.Fatal("hub BLOCKED must not reach storage")
+	}
+}
+
+func TestHubUsersListAdminOnly(t *testing.T) {
+	id := uuid.NewString()
+	cases := []struct {
+		name       string
+		role       string
+		method     string
+		path       string
+		wantStatus int
+		wantProxy  bool
+		wantError  string
+	}{
+		{"admin GET list", "ADMIN", http.MethodGet, "/users", http.StatusOK, true, ""},
+		{"stranger GET list", "STRANGER", http.MethodGet, "/users", http.StatusForbidden, false, "forbidden"},
+		{"family GET list", "FAMILY", http.MethodGet, "/users", http.StatusForbidden, false, "forbidden"},
+		{"blocked GET list", "BLOCKED", http.MethodGet, "/users", http.StatusForbidden, false, "blocked"},
+		{"anonymous GET list", "", http.MethodGet, "/users", http.StatusUnauthorized, false, "unauthorized"},
+		{"admin POST create", "ADMIN", http.MethodPost, "/users", http.StatusNotFound, false, "not found"},
+		{"admin GET by-google-sub", "ADMIN", http.MethodGet, "/users/by-google-sub/11001", http.StatusNotFound, false, "not found"},
+		{"stranger GET by id", "STRANGER", http.MethodGet, "/users/" + id, http.StatusOK, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hr := newGW(t)
+			r := req(tc.method, tc.path)
+			if tc.role != "" {
+				_, raw := hr.login("ada@example.com", "ada", tc.role)
+				r = withAccess(r, raw)
+			}
+			rec := hr.do(r)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status %d want %d body %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantError != "" {
+				var body map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] != tc.wantError {
+					t.Fatalf("error body %s want %q", rec.Body.String(), tc.wantError)
+				}
+			}
+			if tc.wantProxy {
+				if hr.users.path != tc.path {
+					t.Fatalf("upstream path %q want %q", hr.users.path, tc.path)
+				}
+				if hr.up.path != "" {
+					t.Fatalf("must not hit product upstream, path=%q", hr.up.path)
+				}
+			} else if hr.users.path != "" {
+				t.Fatalf("must not proxy, path=%q", hr.users.path)
+			}
+		})
+	}
+}
+
+func TestHubUsersListProxiesWithXUserId(t *testing.T) {
+	hr := newGW(t)
+	sub, raw := hr.login("ada@example.com", "ada", "ADMIN")
+	r := withAccess(req(http.MethodGet, "/users"), raw)
+	r.Header.Set("Authorization", "Bearer "+raw)
+	r.Header.Set("X-User-Id", "client-spoof")
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.users.path != "/users" {
+		t.Fatalf("path %q", hr.users.path)
+	}
+	if hr.users.userID != sub {
+		t.Fatalf("X-User-Id %q want %q", hr.users.userID, sub)
+	}
+	if hr.users.cookie != "" {
+		t.Fatalf("cookie forwarded: %q", hr.users.cookie)
+	}
+	if hr.users.authorization != "" {
+		t.Fatalf("Authorization forwarded: %q", hr.users.authorization)
+	}
+	if hr.users.authID != "" || hr.users.authRole != "" {
+		t.Fatalf("X-Auth-* must not go to User-Service: %+v", hr.users)
+	}
+	hit, err := hr.rej.IsRejected(context.Background(), "", sub, time.Now().Add(-time.Second))
+	if err != nil || hit {
+		t.Fatalf("GET /users must not write rejected:user: hit=%v err=%v", hit, err)
+	}
+}
+
+func TestStorageProxyTimeoutOverride(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(400 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(slow.Close)
+	roles := newStorageRoleMock()
+	roleSrv := httptest.NewServer(roles)
+	t.Cleanup(roleSrv.Close)
+	file, err := Parse([]byte(`
+listen: ":0"
+public_origin: "https://filenkov.store"
+rate_limit:
+  requests_per_minute: 10000
+timeouts:
+  proxy: 60s
+upstreams:
+  storage: "` + slow.URL + `"
+hosts:
+  storage.filenkov.store:
+    role_field: storage
+    timeouts:
+      proxy: 50ms
+    routes:
+      - match: /*
+        upstream: storage
+        auth: session
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{PublicOrigin: "https://filenkov.store", DevHTTP: true}
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	tok := testToken(t, []byte("test-secret-key-32-bytes-long!!!"), time.Minute)
+	users, err := usersvc.New(roleSrv.URL, roleSrv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(cfg, file, tok, rejected.New(rdb), ratelimit.New(rdb), users, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hr := &gwHarness{t: t, h: s.Handler(), tok: tok}
+	sub, raw := hr.login("a@b.c", "a", "STRANGER")
+	roles.role[sub] = "STRANGER"
+	rec := hr.do(withAccess(storageReq(http.MethodGet, "/upload"), raw))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("want 502 from per-host proxy timeout, got %d %s", rec.Code, rec.Body.String())
+	}
+}

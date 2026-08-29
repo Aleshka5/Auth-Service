@@ -1,0 +1,87 @@
+# Auth Gateway routing. Adding a host is a config change, not a code change.
+# First matching route wins — put more specific prefixes before catch-alls.
+# See docs/auth-gateway.md.
+
+listen: ":8083"
+public_origin: "https://filenkov.store"
+
+timeouts:
+  read_header: 15s
+  idle: 120s
+  proxy: 60s          # default (hub / others); per-host override is timeouts.proxy under the host
+
+rate_limit:
+  requests_per_minute: 180
+
+upstreams:
+  api: "http://api:8000"
+  web: "http://web:80"
+  user_service: "http://user_service:8000"
+  hermes: "http://host.docker.internal:8787"
+  # WebStorage joins auth_network as compose service `app` (external network from that stack).
+  storage: "http://app:8000"
+
+hosts:
+  filenkov.store:
+    role_field: global_role
+    # Local HTTP via Caddy on :80: add [localhost]
+    aliases: []
+    routes:
+      - match: /oauth/*
+        upstream: api
+        auth: public
+      - match: /api/refresh
+        upstream: api
+        auth: public
+      - match: /api/logout
+        upstream: api
+        auth: public
+      - match: /api/me
+        upstream: api
+        auth: session
+      - match: /api/*
+        upstream: api
+        auth: session
+      - match: /users/by-google-sub/*
+        auth: reject
+      - match: /users
+        methods: [POST]
+        auth: reject              # create is Auth API on user_network only
+      - match: /users
+        methods: [GET]
+        upstream: user_service
+        auth: admin               # directory list — hub ADMIN only
+        preserve_host: false
+      - match: /users/*
+        upstream: user_service
+        auth: session
+        preserve_host: false
+      - match: /health
+        upstream: api
+        auth: public
+      - match: /hermes/*
+        upstream: hermes
+        auth: admin
+        strip_prefix: /hermes
+      - match: /admin
+        upstream: web
+        auth: admin
+      - match: /admin/*
+        upstream: web
+        auth: admin
+      - match: /*
+        upstream: web
+        auth: public
+
+  storage.filenkov.store:
+    role_field: storage
+    # Uploads need a long reverse-proxy response-header timeout (does not cap the request body).
+    timeouts:
+      proxy: 30m
+    routes:
+      - match: /health
+        upstream: storage
+        auth: public
+      - match: /*
+        upstream: storage
+        auth: session

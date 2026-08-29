@@ -49,10 +49,10 @@ export function Layout() {
         />
         <div className="header-right">
           {loading ? (
-            <span className="muted">Checking session…</span>
+            <span className="muted">Checking sign-in…</span>
           ) : user ? (
             <>
-              <span className="user-name">{user.name}</span>
+              <span className="user-name">{user.username}</span>
               <button
                 type="button"
                 className="btn btn-ghost btn-small"
@@ -77,7 +77,7 @@ export function Layout() {
       </main>
       <footer className="footer">
         <span>Filenkov · personal tools</span>
-        <span>Google sign-in · session on .filenkov.store</span>
+        <span>Google sign-in · httpOnly cookies on .filenkov.store</span>
       </footer>
     </div>
   )

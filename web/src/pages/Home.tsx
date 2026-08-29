@@ -97,7 +97,7 @@ export function Home() {
           <img
             className="arch-svg"
             src={architectureUrl}
-            alt="Filenkov service map: Caddy and DNS in front of the auth gateway, product hosts, databases, Redis cache, MinIO, and gRPC validate calls."
+            alt="Filenkov service map: Caddy TLS in front of the Auth Gateway, product hosts, databases, Redis cache, and MinIO."
           />
           <figcaption className="arch-caption">The live map. Scroll sideways if the screen is narrow.</figcaption>
         </figure>

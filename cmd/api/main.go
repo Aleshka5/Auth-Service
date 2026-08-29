@@ -4,30 +4,23 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/aleshka5/auth-service/internal/config"
-	grpcapi "github.com/aleshka5/auth-service/internal/grpc"
+	"github.com/aleshka5/auth-service/internal/gateway"
 	httpapi "github.com/aleshka5/auth-service/internal/http"
 	applog "github.com/aleshka5/auth-service/internal/log"
 	"github.com/aleshka5/auth-service/internal/oauth"
 	"github.com/aleshka5/auth-service/internal/ratelimit"
-	"github.com/aleshka5/auth-service/internal/session"
-	"github.com/aleshka5/auth-service/internal/users"
-	"github.com/aleshka5/auth-service/internal/whitelist"
-	"github.com/aleshka5/auth-service/pkg/authpb"
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/aleshka5/auth-service/internal/rejected"
+	"github.com/aleshka5/auth-service/internal/sid"
+	"github.com/aleshka5/auth-service/internal/token"
+	"github.com/aleshka5/auth-service/internal/usersvc"
 	"github.com/redis/go-redis/v9"
-	"google.golang.org/grpc"
 )
 
 func main() {
@@ -43,23 +36,17 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	if cfg.GatewayConfig != "" {
+		gwFile, err := gateway.LoadFile(cfg.GatewayConfig)
+		if err != nil {
+			return err
+		}
+		cfg.SetGatewayHosts(gwFile.Hostnames())
+		logger.Info("gateway_return_to_hosts", "path", cfg.GatewayConfig, "hosts", gwFile.Hostnames())
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-
-	if err := runMigrations(cfg.DatabaseURL, cfg.MigrationsPath); err != nil {
-		return err
-	}
-	logger.Info("migrations_applied", "path", cfg.MigrationsPath)
-
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
-		return err
-	}
 
 	opt, err := redis.ParseURL(cfg.RedisURL)
 	if err != nil {
@@ -71,24 +58,32 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	userStore := users.NewStore(pool, cfg.AdminEmail)
-	sess := session.NewStore(rdb, cfg.SessionTTL)
-	wl := whitelist.New(cfg.Whitelist)
-	if err := wl.Persist(ctx, rdb); err != nil {
+	tokens, err := token.New(token.Config{
+		Secret:     []byte(cfg.JWTSecret),
+		Issuer:     cfg.PublicOrigin,
+		Audiences:  cfg.JWTAudiences(),
+		AccessTTL:  cfg.JWTAccessTTL,
+		RefreshTTL: cfg.JWTRefreshTTL,
+	})
+	if err != nil {
 		return err
 	}
-	logger.Info("whitelist_loaded", "hosts", cfg.Whitelist)
+	users, err := usersvc.New(cfg.UserServiceURL, nil)
+	if err != nil {
+		return err
+	}
+
 	limiter := ratelimit.New(rdb)
 	oauthSvc := oauth.New(cfg, rdb)
-
 	httpHandler := httpapi.New(
 		cfg,
-		userStore,
-		sess,
+		tokens,
+		rejected.New(rdb),
+		users,
 		oauthSvc,
 		limiter,
-		func() error { return pool.Ping(context.Background()) },
 		func() error { return rdb.Ping(context.Background()).Err() },
+		sid.New(rdb),
 	).Handler()
 
 	httpSrv := &http.Server{
@@ -97,24 +92,10 @@ func run(logger *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	grpcSrv := grpc.NewServer()
-	authpb.RegisterAuthServer(grpcSrv, grpcapi.New(sess, userStore, wl))
-
-	lis, err := net.Listen("tcp", cfg.GRPCAddr)
-	if err != nil {
-		return err
-	}
-
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("http_listen", "addr", cfg.HTTPAddr)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
-		}
-	}()
-	go func() {
-		logger.Info("grpc_listen", "addr", cfg.GRPCAddr)
-		if err := grpcSrv.Serve(lis); err != nil {
 			errCh <- err
 		}
 	}()
@@ -128,30 +109,5 @@ func run(logger *slog.Logger) error {
 	logger.Info("shutting_down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = httpSrv.Shutdown(shutdownCtx)
-	grpcSrv.GracefulStop()
-	return nil
-}
-
-func runMigrations(databaseURL, path string) error {
-	u := databaseURL
-	switch {
-	case strings.HasPrefix(u, "postgres://"):
-		u = "pgx5://" + strings.TrimPrefix(u, "postgres://")
-	case strings.HasPrefix(u, "postgresql://"):
-		u = "pgx5://" + strings.TrimPrefix(u, "postgresql://")
-	}
-	src := path
-	if !strings.HasPrefix(src, "file://") {
-		src = "file://" + src
-	}
-	m, err := migrate.New(src, u)
-	if err != nil {
-		return err
-	}
-	defer m.Close()
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return err
-	}
-	return nil
+	return httpSrv.Shutdown(shutdownCtx)
 }

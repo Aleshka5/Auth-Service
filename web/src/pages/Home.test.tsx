@@ -44,7 +44,7 @@ describe('Home', () => {
     renderHome()
     const hermes = await screen.findByRole('link', { name: 'Open Hermes' })
     expect(hermes).toHaveAttribute('href', '/hermes/')
-    expect(screen.queryByText(stranger.name)).not.toBeInTheDocument()
+    expect(screen.queryByText(stranger.username)).not.toBeInTheDocument()
   })
 
   it('opens a branch from the business line to the technical detail', async () => {
