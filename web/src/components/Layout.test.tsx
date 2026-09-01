@@ -1,9 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '../auth'
 import { Layout } from './Layout'
 import { admin, jsonResponse, stranger } from '../test/fixtures'
+
+beforeEach(() => {
+  vi.stubGlobal('scrollTo', vi.fn())
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -33,30 +37,55 @@ async function mascot(clip: string) {
   })
 }
 
+const FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+
 describe('Layout', () => {
-  it('shows Sign in for anonymous users', async () => {
+  it('shows Sign in and locked service links for anonymous users', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'unauthorized' }, 401)))
     renderLayout()
     expect(await screen.findByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/auth')
+
+    for (const [label, href] of [
+      ['LLM', 'https://llm.filenkov.store'],
+      ['Storage', 'https://storage.filenkov.store'],
+      ['Hermes', '/hermes/chat'],
+    ]) {
+      const link = screen.getByRole('link', { name: label })
+      expect(link).toHaveAttribute('href', href)
+      expect(link).toHaveAttribute('title', 'Sign in required')
+      expect(link.querySelector('.service-lock')).not.toBeNull()
+    }
+
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Hermes' })).not.toBeInTheDocument()
   })
 
-  it('shows the name, Admin, and Hermes for admins', async () => {
+  it('shows the name, Admin, and unlocked services for admins', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(admin)))
     renderLayout()
     expect(await screen.findByText('Boss')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Admin' })).toHaveAttribute('href', '/admin')
     expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', '/hermes/chat')
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect(document.querySelectorAll('.service-lock')).toHaveLength(0)
   })
 
-  it('shows Hermes but not Admin for signed-in non-admins', async () => {
+  it('shows services but not Admin for signed-in non-admins', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(stranger)))
     renderLayout()
     expect(await screen.findByText('Ann')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', '/hermes/chat')
+    expect(screen.getByRole('link', { name: 'LLM' })).not.toHaveAttribute('title')
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
+  })
+
+  it('puts the skip link first in the tab order, pointing at the article', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(stranger)))
+    const { container } = renderLayout()
+    await screen.findByText('Ann')
+    const first = container.querySelector(FOCUSABLE)
+    expect(first).toHaveClass('skip-link')
+    expect(first).toHaveAttribute('href', '#node-article')
+    expect(first).toHaveTextContent('Skip to article')
   })
 
   it('plays calm-to-angry for guests on home', async () => {

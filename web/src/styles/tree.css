@@ -1,0 +1,334 @@
+.node-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 13rem) minmax(0, var(--measure)) minmax(0, 13rem);
+  justify-content: center;
+  gap: var(--s6);
+  animation: node-in var(--dur) var(--ease) both;
+}
+
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* --- spine --------------------------------------------------------------- */
+
+.spine {
+  position: sticky;
+  top: calc(var(--header-h-c) + var(--s5));
+  align-self: start;
+}
+
+.spine ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.spine ol::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 0.6rem;
+  bottom: 0;
+  width: 1px;
+  background: var(--rule-strong);
+  mask-image: linear-gradient(#000 60%, transparent);
+}
+
+.spine-item {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  min-height: 2.75rem;
+  padding-left: 0;
+}
+
+.spine-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid var(--rule-strong);
+  background: var(--paper);
+  position: relative;
+  z-index: 1;
+  transform: translateY(-1px);
+}
+
+.spine-item[data-current] .spine-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.spine-label {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  text-decoration: none;
+  line-height: 1.3;
+}
+
+a.spine-label:hover {
+  color: var(--accent-text);
+}
+
+.spine-item[data-current] .spine-label {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+/* --- branch cards -------------------------------------------------------- */
+
+.branches {
+  margin-top: var(--s7);
+}
+
+.branch-group + .branch-group {
+  margin-top: var(--s6);
+}
+
+.branch-heading {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0 0 var(--s2);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.branch-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.branch-card + .branch-card {
+  border-top: 1px solid var(--rule);
+}
+
+.branch-card:last-child {
+  border-bottom: 1px solid var(--rule);
+}
+
+.branch-card > a {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--s3);
+  min-height: 4.5rem;
+  padding: var(--s4) var(--s2) var(--s4) var(--s3);
+  text-decoration: none;
+  color: inherit;
+}
+
+.branch-card > a::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transform-origin: top;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.branch-card > a:hover::before,
+.branch-card > a:focus-visible::before {
+  transform: scaleY(1);
+}
+
+.branch-card > a:hover .branch-title,
+.branch-card > a:focus-visible .branch-title {
+  color: var(--accent-text);
+}
+
+.branch-num {
+  font-family: var(--serif);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text);
+  font-size: var(--step--1);
+}
+
+.branch-body {
+  display: grid;
+  gap: var(--s1);
+  min-width: 0;
+}
+
+.branch-title {
+  font-size: var(--step-1);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.branch-teaser {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  line-height: 1.45;
+}
+
+.branch-meta {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.branch-arrow {
+  color: var(--ink-muted);
+}
+
+.branch-siblings {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  margin: 0;
+  padding: var(--s3) 0 0;
+}
+
+.branch-siblings a {
+  color: var(--ink-muted);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: var(--step--1);
+}
+
+.branch-siblings a:hover {
+  color: var(--accent-text);
+}
+
+.branch-up {
+  display: inline-block;
+  margin-top: var(--s6);
+  color: var(--ink-muted);
+  text-decoration: none;
+  font-size: var(--step--1);
+  font-weight: 600;
+}
+
+.branch-up:hover {
+  color: var(--accent-text);
+}
+
+/* --- loading and failure -------------------------------------------------- */
+
+.node-skeleton {
+  min-height: 18rem;
+  display: grid;
+  gap: var(--s3);
+  align-content: start;
+}
+
+.node-skeleton span {
+  height: 0.75rem;
+  background: var(--rule);
+  opacity: 0.55;
+}
+
+.node-skeleton-hold {
+  gap: 0;
+}
+
+.node-error {
+  min-height: 18rem;
+  border-left: 2px solid var(--danger);
+  padding-left: var(--s4);
+}
+
+.node-error p {
+  margin: 0 0 var(--s4);
+  color: var(--danger);
+}
+
+/* --- breakpoints ---------------------------------------------------------- */
+
+@media (max-width: 1080px) {
+  .node-layout {
+    grid-template-columns: minmax(0, 10rem) minmax(0, var(--measure));
+  }
+}
+
+@media (max-width: 760px) {
+  .node-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s5);
+  }
+
+  .spine {
+    top: var(--header-h-c);
+    margin: 0 calc(var(--s4) * -1);
+    height: 2.75rem;
+    border-bottom: 1px solid var(--rule);
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    backdrop-filter: blur(8px);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+
+  .spine::-webkit-scrollbar {
+    display: none;
+  }
+
+  .spine ol {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    padding: 0 var(--s4);
+    gap: var(--s3);
+    width: max-content;
+  }
+
+  .spine ol::before {
+    content: none;
+  }
+
+  .spine-item {
+    min-height: 2.75rem;
+    align-items: center;
+  }
+
+  .spine-item:last-child {
+    scroll-snap-align: end;
+  }
+
+  .spine-item + .spine-item::before {
+    content: '›';
+    color: var(--rule-strong);
+    margin-right: var(--s2);
+  }
+
+  .spine-dot {
+    display: none;
+  }
+
+  .spine-item[data-current] .spine-dot {
+    display: block;
+  }
+
+  .branch-card > a {
+    grid-template-columns: 2rem minmax(0, 1fr) auto;
+  }
+
+  .branch-meta {
+    grid-column: 2;
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .node-layout {
+    animation: none;
+  }
+}

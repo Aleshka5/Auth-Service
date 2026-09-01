@@ -1,0 +1,56 @@
+:root {
+  /* ink */
+  --paper: #f4efe6;
+  --paper-raised: #fffdf8;
+  --ink: #1a1612;
+  --ink-muted: #5c5348;
+  --rule: #d9d1c3;
+  --rule-strong: #b9ae9c;
+
+  /* accent — graphical vs. readable, so accent text passes AA */
+  --accent: #b85c38;
+  --accent-text: #8f4128;
+
+  --chip: #e6ddd0;
+  --danger: #8c2f24;
+
+  /* type */
+  --serif: 'Fraunces', 'Fraunces Fallback', 'Iowan Old Style', 'Palatino Linotype', serif;
+  --sans: 'Public Sans', 'Public Sans Fallback', system-ui, 'Segoe UI', sans-serif;
+
+  --step--1: 0.8125rem;
+  --step-0: 1.0625rem;
+  --step-1: 1.25rem;
+  --step-2: 1.5rem;
+  --step-3: 1.9rem;
+  --step-4: clamp(2.2rem, 4.5vw, 3.1rem);
+
+  --measure: 34rem;
+
+  /* space — 4px base */
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --s7: 3rem;
+  --s8: 4.5rem;
+
+  /* motion — two durations, one curve */
+  --dur-fast: 140ms;
+  --dur: 240ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --header-h: 4.5rem;
+  --header-h-c: 3.5rem;
+
+  --read: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur: 1ms;
+  }
+}

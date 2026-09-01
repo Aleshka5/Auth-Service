@@ -1,0 +1,216 @@
+.node-article {
+  min-width: 0;
+}
+
+.node-article > h1 {
+  margin: 0;
+}
+
+.node-article > h1:focus-visible {
+  outline-offset: 6px;
+}
+
+.node-meta {
+  margin: var(--s3) 0 0;
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  letter-spacing: 0.04em;
+}
+
+.node-body {
+  margin-top: var(--s5);
+}
+
+.node-body p,
+.node-body ul,
+.node-body ol {
+  margin: 0 0 var(--s4);
+}
+
+.node-body ul,
+.node-body ol {
+  padding-left: var(--s5);
+}
+
+.node-body li + li {
+  margin-top: var(--s2);
+}
+
+.node-body a {
+  color: var(--accent-text);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.lede {
+  font-size: var(--step-1);
+  line-height: 1.5;
+  color: var(--ink);
+  margin: 0 0 var(--s5);
+}
+
+.a-section {
+  margin: var(--s7) 0 0;
+  padding-top: var(--s5);
+  border-top: 1px solid var(--rule);
+}
+
+.a-section > h2 {
+  font-size: var(--step-2);
+  margin: 0 0 var(--s4);
+}
+
+.a-section h3 {
+  font-size: var(--step-1);
+  margin: var(--s5) 0 var(--s3);
+}
+
+.a-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  list-style: none;
+  margin: 0 0 var(--s4);
+  padding: 0;
+}
+
+.a-chips li {
+  background: var(--chip);
+  border: 1px solid var(--rule);
+  padding: 0.1rem 0.5rem;
+  font-size: var(--step--1);
+  color: var(--ink);
+}
+
+.a-figure {
+  margin: var(--s5) 0;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  padding: var(--s4);
+}
+
+.a-figure-scroll {
+  overflow-x: auto;
+}
+
+.a-figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.a-figure-scroll img {
+  max-width: none;
+  min-width: 34rem;
+}
+
+.a-figure figcaption {
+  margin-top: var(--s3);
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.a-callout {
+  margin: var(--s5) 0;
+  padding-left: var(--s4);
+  border-left: 2px solid var(--accent);
+}
+
+.a-callout p {
+  margin: 0 0 var(--s2);
+}
+
+.a-callout-title {
+  font-weight: 650;
+}
+
+.a-metrics {
+  list-style: none;
+  margin: var(--s5) 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.a-metric {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
+  gap: var(--s1) var(--s4);
+  padding: var(--s4) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.a-metric-value {
+  grid-row: 1 / span 2;
+  font-family: var(--serif);
+  font-size: var(--step-2);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text);
+  line-height: 1.2;
+}
+
+.a-metric-label {
+  font-weight: 600;
+}
+
+.a-metric-how {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.a-timeline {
+  list-style: none;
+  margin: var(--s5) 0;
+  padding: 0 0 0 var(--s4);
+  border-left: 1px solid var(--rule);
+}
+
+.a-timeline li {
+  display: grid;
+  gap: var(--s1);
+  padding-bottom: var(--s4);
+}
+
+.a-timeline-when {
+  font-size: var(--step--1);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.a-timeline-what {
+  font-weight: 600;
+}
+
+.a-timeline-detail {
+  color: var(--ink-muted);
+}
+
+.a-deflist {
+  margin: var(--s5) 0;
+}
+
+.a-deflist > div {
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.a-deflist dt {
+  font-weight: 650;
+}
+
+.a-deflist dd {
+  margin: var(--s1) 0 0;
+  color: var(--ink-muted);
+}
+
+.node-outbound {
+  margin: var(--s6) 0 0;
+}
+
+.node-role {
+  margin: var(--s3) 0 var(--s5);
+  font-family: var(--serif);
+  font-size: var(--step-2);
+  font-weight: 650;
+  color: var(--accent-text);
+}

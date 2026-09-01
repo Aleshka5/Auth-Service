@@ -172,7 +172,7 @@ hosts:
         auth: admin
       - match: /*
         upstream: web
-        auth: public     # /, /auth, /architecture, SPA assets
+        auth: public     # /, /auth, every resume node path, SPA assets
 
   storage.filenkov.store:
     role_field: storage
@@ -196,7 +196,7 @@ hosts:
         auth: session
 ```
 
-Hub public routes (catch-all `auth: public`): `/`, `/auth`, `/architecture`, static SPA assets. Explicit public API: OAuth, `/api/refresh`, `/api/logout`, `/health`. Protected: `/admin` and **`GET /users`** (`admin`); `/hermes` and `/hermes/*` (session JWT + injected Bearer; [hermes.md](hermes.md)); `/api/me` and other `/api/*` (`session`); `/users/*` (`session`). Hidden: **`POST /users`** and `/users/by-google-sub/*` (`reject`). There is **no** `/api/admin/*` route. Hub admin directory: [user-story-admin-directory.md](user-story-admin-directory.md).
+Hub public routes (catch-all `auth: public`): `/`, `/auth`, static SPA assets, and **every path the resume tree serves** — anything not matched by an earlier route reaches the SPA, which resolves it against `web/src/resume/registry.ts` and falls back to `/`. `/architecture/:slug` is now only a client-side redirect into `/about-project/architecture/:slug`, not a gateway route. The tree needed **no** `deploy/gateway.yaml` change: the trailing `- match: /*` already served every node path, and `web/nginx.conf` already does `try_files $uri $uri/ /index.html`. Explicit public API: OAuth, `/api/refresh`, `/api/logout`, `/health`. Protected: `/admin` and **`GET /users`** (`admin`); `/hermes` and `/hermes/*` (session JWT + injected Bearer; [hermes.md](hermes.md)); `/api/me` and other `/api/*` (`session`); `/users/*` (`session`). Hidden: **`POST /users`** and `/users/by-google-sub/*` (`reject`). There is **no** `/api/admin/*` route. Hub admin directory: [user-story-admin-directory.md](user-story-admin-directory.md).
 
 Storage host: `GET /health` is public. Everything else requires a valid access JWT (`auth: session`). Anonymous HTML → **302** hub `/auth?return_to=`; `/api/*` and XHR → **401**. Hub `POST /users` stays **rejected**. Hub `GET /users` is **admin** (not anonymous, not session).
 

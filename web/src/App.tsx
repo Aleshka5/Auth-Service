@@ -1,10 +1,9 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './auth'
 import { Layout } from './components/Layout'
+import { LegacyArchitectureRedirect, NodeRoute } from './components/tree/NodeRoute'
 import { Admin } from './pages/Admin'
-import { Architecture } from './pages/Architecture'
 import { Auth } from './pages/Auth'
-import { Home } from './pages/Home'
 
 export default function App() {
   return (
@@ -12,11 +11,10 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/" element={<Home />} />
-            <Route path="/architecture/:slug" element={<Architecture />} />
             <Route path="/auth" element={<Auth />} />
             <Route path="/admin" element={<Admin />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="/architecture/:slug" element={<LegacyArchitectureRedirect />} />
+            <Route path="*" element={<NodeRoute />} />
           </Route>
         </Routes>
       </AuthProvider>

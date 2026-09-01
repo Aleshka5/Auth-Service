@@ -28,7 +28,7 @@ User-Service enum (exact strings): `ADMIN` | `FAMILY` | `STRANGER` | `BLOCKED`. 
 
 Routing is YAML (`deploy/gateway.yaml`). Live hosts: `filenkov.store`, `storage.filenkov.store`, and `llm.filenkov.store`. Adding a host is a config change, not a code change. First matching route wins — put specific prefixes first. See `docs/auth-gateway.md`.
 
-Edge policy: no valid access JWT, or `global_role == BLOCKED` / user in `rejected_cache`, is not proxied (except `auth: public`). Browser navigations redirect to `{PUBLIC_ORIGIN}/auth?return_to=…`; `/api/*`, `/users/*`, exact `/users`, and typical XHR get `401` JSON; BLOCKED with a token gets `403`. Hub main page, `/auth`, `/architecture`, SPA assets, `/oauth/*`, `/api/refresh`, `/api/logout`, and `/health` are public. `/admin` and `GET /users` are admin-only (`global_role == ADMIN`). `/hermes/*` is session (any signed-in user). `/api/me` requires an access JWT. `POST /users` is rejected.
+Edge policy: no valid access JWT, or `global_role == BLOCKED` / user in `rejected_cache`, is not proxied (except `auth: public`). Browser navigations redirect to `{PUBLIC_ORIGIN}/auth?return_to=…`; `/api/*`, `/users/*`, exact `/users`, and typical XHR get `401` JSON; BLOCKED with a token gets `403`. On the hub, every path not claimed by a specific route is public and reaches the SPA — the resume tree at any depth, `/auth`, and SPA assets (`/architecture/*` is now only a client-side legacy redirect into the tree, not a route). Also public: `/oauth/*`, `/api/refresh`, `/api/logout`, and `/health`. `/admin` and `GET /users` are admin-only (`global_role == ADMIN`). `/hermes/*` is session (any signed-in user). `/api/me` requires an access JWT. `POST /users` is rejected.
 
 On proxied requests the gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role`.
 
@@ -57,7 +57,17 @@ JSON-capable (`slog` JSON) including gateway access logs, for Loki later.
 ## Frontend (Vite, production static)
 
 1. Auth page (`filenkov.store/auth`) — Google OAuth2.
-2. Main page (`filenkov.store`) — public. Sign in vs **username**. Links: llm.filenkov.store, storage.filenkov.store, and `filenkov.store/hermes/chat` (any signed-in user).
+2. Hub (`filenkov.store`) — public **resume tree**, not one scrolling page. Every path not claimed by `/auth`, `/admin`, or the legacy `/architecture/:slug` redirect is a tree node served by the SPA catch-all (`path="*"` → `NodeRoute`). Unknown paths and nodes the reader may not see redirect to `/`. Design doc + what shipped: [docs/resume-tree-frontend.md](docs/resume-tree-frontend.md).
+   - A node **is a folder** under `web/src/resume/nodes/`, and the folder path is the URL path. `web/src/resume/registry.ts` discovers them with `import.meta.glob` — there is **no central list of nodes**. 30 nodes today (root + 29). To add one: add a folder with `meta.ts` + `node.tsx`. Do not add a route, a data file, or a registry entry.
+   - `web/src/resume/registry.test.ts` enforces 8 structural invariants (meta/body pairing, parent exists, kebab-case segments, no reserved depth-1 segment, unique sibling `order`, depth ≤ 4, teaser ≤ 120 chars, root at path `''`). A typo fails the build instead of shipping a missing page.
+   - `meta.ts` is eager, so the spine, branch cards, title and meta line paint with no spinner. `node.tsx` is lazy — one Rollup chunk per node, named after the URL path.
+   - `/about-project/architecture/<slug>` is a **dynamic child**: 10 solution pages served by one node body with no folder each, declared via `meta.dynamicChild` in `web/src/resume/nodes/about-project/architecture/meta.ts`.
+   - Visibility is declarative: `visibleWhen: 'signed-in' | 'admin'` in `meta.ts`. `achievements/projects/hermes` is the only `signed-in` node today.
+   - Header (`web/src/components/Layout.tsx`): three scroll states written straight onto `<html data-header>` by `web/src/hooks/useScrollChrome.ts` — no React re-render on scroll. Sign in vs **username**. Service links: llm.filenkov.store, storage.filenkov.store, `filenkov.store/hermes/chat` (shown to everyone, with a lock for guests) and `/admin` (`global_role == ADMIN` only).
+   - The owl is no longer in the header: `web/src/components/owl/Owl.tsx` is a hero owl in the flow that cross-fades into a fixed "Back to top" button at 180 px of scroll.
+   - Styles: `web/src/styles/{fonts,tokens,base,shell,article,tree,forms}.css`, imported in that order by `main.tsx`. `web/src/index.css` is gone. Fonts are self-hosted from `web/public/fonts/` — no `fonts.googleapis.com` request.
+   - `web/vite.config.ts` generates `sitemap.xml` + `robots.txt` from the node folders and fails the build if initial JS exceeds 95 KB gzipped (88.5 KB today).
+   - `web/nginx.conf` `try_files $uri $uri/ /index.html` is unchanged and is why every deep node URL works. `deploy/gateway.yaml` needed **no** change — the trailing `- match: /*  upstream: web  auth: public` already serves every node path.
 3. Admin page (`filenkov.store/admin`) — hub `global_role == ADMIN` only. Directory table from User-Service `GET /users` (full list, email search in the SPA), then `PUT /users/{id}/role` and `PUT /users/{id}/roles/{service}`. Gateway exposes `GET /users` as `auth: admin`; `POST /users` stays rejected. Do not call `/api/admin`. Shipped behavior: `docs/user-story-admin-directory.md`.
 
 SPA: `credentials: 'include'`; on `401` from `/api/me` (and other same-origin calls), `POST /api/refresh` then retry. Display `username` / `email` / `global_role` / `services[]`.

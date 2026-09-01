@@ -12,7 +12,7 @@ Auth has **no Postgres users DB and no gRPC**. Those were removed: edge sessions
 cmd/api/          Internal auth API (OAuth, /api/me, /api/refresh, /api/logout, /health)
 cmd/gateway/      Public HTTP edge after Caddy (:8083)
 internal/         config, http, gateway, oauth, token, rejected, usersvc, ratelimit, log
-web/              Vite SPA (static nginx image, internal upstream)
+web/              Vite SPA — resume tree + /auth + /admin (static nginx image, internal upstream)
 deploy/           docker-compose.yml, Dockerfiles, gateway.yaml
 docs/             auth-gateway.md, user-story-*.md (directory contract, storage host, admin directory list)
 ```
@@ -211,6 +211,22 @@ The gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` so cli
 **User-Service** upstream: strip `Cookie` and `Authorization`; set `X-User-Id` from JWT `sub`. Do not send JWTs.
 
 `/hermes/*` is `auth: session` at the edge (any signed-in user; `BLOCKED` / `rejected_cache` still 403). The `/hermes` prefix is stripped before proxying to the Hermes container (`http://hermes:8787` on `auth_network`). Hermes receives `X-Forwarded-Prefix: /hermes` and the injected Bearer. Set `HERMES_DASHBOARD_AUTH_JWT_SECRET` = `JWT_SECRET`. See [docs/hermes.md](docs/hermes.md).
+
+## Hub SPA (`web/`)
+
+The hub is a **resume tree**, not one scrolling page. `App.tsx` keeps `/auth` and `/admin`, redirects the legacy `/architecture/:slug`, and serves everything else from a `path="*"` catch-all; an unknown path or a node the reader may not see redirects to `/`.
+
+**Authoring a node is adding a folder** under `web/src/resume/nodes/` with a `meta.ts` and a `node.tsx` — the folder path *is* the URL path. `web/src/resume/registry.ts` discovers the folders with `import.meta.glob`, so there is no central node list and no route to register. 30 nodes today (root + 29). `registry.test.ts` enforces 8 structural invariants (meta/body pairing, existing parent, kebab-case segments, no reserved depth-1 segment, unique sibling `order`, depth ≤ 4, teaser ≤ 120 chars, root at path `''`), so a typo fails the build rather than producing a missing page.
+
+- `meta.ts` is eager — the spine, branch cards, title and meta line paint immediately, with no spinner. `node.tsx` is lazy: one Rollup chunk per node, named after its URL path.
+- `/about-project/architecture/<slug>` is a dynamic child: 10 solution pages served by one node body via `meta.dynamicChild`, no folder each.
+- Node visibility is declarative — `visibleWhen: 'signed-in' | 'admin'` in `meta.ts`. `achievements/projects/hermes` is the only signed-in node.
+- Header (`components/Layout.tsx`) has three scroll states written onto `<html data-header>` by `hooks/useScrollChrome.ts` (no React re-render on scroll), plus service links to LLM, Storage, Hermes (everyone, locked for guests) and Admin (`ADMIN` only). The owl (`components/owl/Owl.tsx`) is a hero in the flow that cross-fades into a "Back to top" button on scroll.
+- Styles live in `web/src/styles/{fonts,tokens,base,shell,article,tree,forms}.css`; fonts are self-hosted from `web/public/fonts/` (no Google Fonts request).
+- `web/vite.config.ts` emits `sitemap.xml` and `robots.txt` from the node folders and fails the build if initial JS exceeds 95 KB gzipped (88.5 KB today).
+- Deep links work because `web/nginx.conf` does `try_files $uri $uri/ /index.html`. **No `deploy/gateway.yaml` change was needed** — the trailing `- match: /*  upstream: web  auth: public` already serves every node path.
+
+Design doc and what shipped: [docs/resume-tree-frontend.md](docs/resume-tree-frontend.md).
 
 ## Admin (SPA → gateway → User-Service)
 
