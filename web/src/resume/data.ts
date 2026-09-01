@@ -187,9 +187,9 @@ export const projectTree = (showHermes: boolean): TreeItem[] => {
     items.push({
       id: 'proj-hermes',
       title: 'Hermes',
-      meta: 'filenkov.store/hermes/',
-      summary: 'Internal tools. Off the public list.',
-      href: '/hermes/',
+      meta: 'filenkov.store/hermes/chat',
+      summary: 'Agent dashboard behind the same Google sign-in.',
+      href: '/hermes/chat',
     })
   }
 

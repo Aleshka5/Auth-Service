@@ -11,11 +11,10 @@ import {
   projectTree,
   stackTree,
 } from '../resume/data'
-import { isAdmin } from '../types'
 
 export function Home() {
   const { user } = useAuth()
-  const showHermes = isAdmin(user)
+  const showHermes = Boolean(user)
 
   useEffect(() => {
     const id = window.location.hash.replace('#', '')

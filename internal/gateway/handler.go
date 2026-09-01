@@ -75,7 +75,9 @@ func (s *Server) Handler() http.Handler {
 	h = s.withAccessLog(h)
 	h = s.withSecurityHeaders(h)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		applySecurityHeaders(w.Header(), !s.cfg.DevHTTP)
+		if !isWebSocketRequest(r) {
+			applySecurityHeaders(w.Header(), !s.cfg.DevHTTP)
+		}
 		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 			s.handleHealthz(w, r)
 			return
@@ -89,6 +91,10 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
+	if loc := hermesDroppedAssetRedirect(r); loc != "" {
+		http.Redirect(w, r, loc, http.StatusFound)
+		return
+	}
 	host, route, ok := s.router.MatchMethod(r.Host, r.Method, r.URL.Path)
 	if !ok || route == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -107,6 +113,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.authorize(w, r, route.auth, id) {
+		return
+	}
+
+	if route.redirect != "" {
+		http.Redirect(w, r, route.redirect, http.StatusFound)
 		return
 	}
 
@@ -162,7 +173,9 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 
 func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		applySecurityHeaders(w.Header(), !s.cfg.DevHTTP)
+		if !isWebSocketRequest(r) {
+			applySecurityHeaders(w.Header(), !s.cfg.DevHTTP)
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -177,7 +190,8 @@ func newProxyTransport(responseHeaderTimeout time.Duration) *http.Transport {
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
+		// HTTP/2 cannot Upgrade; Hermes PTY chat is a WebSocket.
+		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -219,6 +233,7 @@ func (s *Server) newProxy() *httputil.ReverseProxy {
 		}
 	}
 	p := &httputil.ReverseProxy{
+		FlushInterval: -1,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			t, _ := pr.In.Context().Value(proxyTargetKey).(proxyTarget)
 			if t.route == nil || t.route.upstream == nil {
@@ -233,11 +248,20 @@ func (s *Server) newProxy() *httputil.ReverseProxy {
 				pr.Out.URL.RawPath = ""
 			}
 			s.applyProxyIdentity(pr, t)
+			applyHermesPublicPrefix(pr, t)
 		},
 		Transport: &timeoutSwitch{byTimeout: transports, fallback: transports[defaultTO]},
 		ModifyResponse: func(resp *http.Response) error {
+			if resp != nil && resp.StatusCode == http.StatusSwitchingProtocols {
+				return nil
+			}
 			applySecurityHeaders(resp.Header, !s.cfg.DevHTTP)
 			s.maybeRejectTargetUser(resp)
+			if resp != nil && resp.Request != nil {
+				if t, ok := resp.Request.Context().Value(proxyTargetKey).(proxyTarget); ok && hermesStripPrefix(t) {
+					return rewriteHermesPublicResponse(resp, t.route.stripPrefix)
+				}
+			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -271,6 +295,10 @@ func setForwarded(r *http.Request, devHTTP bool) {
 	if r.Header.Get("X-Forwarded-Host") == "" {
 		r.Header.Set("X-Forwarded-Host", r.Host)
 	}
+}
+
+func isWebSocketRequest(r *http.Request) bool {
+	return r != nil && strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
 func applySecurityHeaders(h http.Header, hsts bool) {
@@ -318,6 +346,9 @@ func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	h, ok := w.ResponseWriter.(http.Hijacker)
 	if !ok {
 		return nil, nil, errors.New("hijack not supported")
+	}
+	if w.status == http.StatusOK {
+		w.status = http.StatusSwitchingProtocols
 	}
 	return h.Hijack()
 }

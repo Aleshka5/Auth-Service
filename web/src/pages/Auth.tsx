@@ -13,11 +13,24 @@ function GoogleMark() {
   )
 }
 
+function sameOriginReturnTo(raw: string | null): string | null {
+  if (!raw) return null
+  try {
+    const u = new URL(raw, window.location.origin)
+    if (u.username || u.password) return null
+    if (u.origin !== window.location.origin) return null
+    return `${u.pathname}${u.search}${u.hash}` || '/'
+  } catch {
+    return null
+  }
+}
+
 export function Auth() {
   const { user, loading } = useAuth()
   const [params] = useSearchParams()
   const returnTo = params.get('return_to')
   const href = googleAuthPath(returnTo)
+  const continueHref = sameOriginReturnTo(returnTo)
 
   return (
     <section className="auth-page">
@@ -35,7 +48,11 @@ export function Auth() {
             <p>
               You are already signed in as <strong>{user.username}</strong>.
             </p>
-            {returnTo ? (
+            {continueHref ? (
+              <a className="btn" href={continueHref}>
+                Continue to destination
+              </a>
+            ) : returnTo ? (
               <a className="btn" href={href}>
                 Continue to destination
               </a>

@@ -40,6 +40,7 @@ export function Layout() {
               Home
             </NavLink>
             {admin ? <NavLink to="/admin">Admin</NavLink> : null}
+            {user ? <a href="/hermes/chat">Hermes</a> : null}
           </nav>
         </div>
         <HeaderMascot

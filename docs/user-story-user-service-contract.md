@@ -367,7 +367,7 @@ upstreams:
   api: "http://api:8000"          # Auth API — internal only
   web: "http://web:80"
   user_service: "http://user_service:8000"
-  hermes: "http://host.docker.internal:8787"
+  hermes: "http://hermes:8787"
 ```
 
 `filenkov.store` routes (**first match wins**; more specific prefixes first):
@@ -384,7 +384,8 @@ upstreams:
 | `GET /users` exact | `user_service` | **admin** | Hub ADMIN directory list. See [`user-story-admin-directory.md`](user-story-admin-directory.md). |
 | `/users/*` | `user_service` | `session` | GET/PUT by UUID and roles. Strip cookies; set `X-User-Id`. |
 | `/health` | `api` | `public` | Auth API liveness/readiness (Redis) |
-| `/hermes/*` | `hermes` | `admin` | `strip_prefix: /hermes`; `X-Auth-*`; `Authorization: Bearer <access JWT>`; `X-Forwarded-Prefix: /hermes` |
+| `/hermes/*` | `hermes` | `session` | `strip_prefix: /hermes`; `inject_access_jwt`; `X-Auth-*`; `X-Forwarded-Prefix: /hermes`. Shipped contract: [`hermes.md`](hermes.md). |
+| `GET /chat`, `GET /sessions` | — | `session` | 302 to `/hermes/chat` and `/hermes/sessions` |
 | `/admin`, `/admin/*` | `web` | `admin` | `global_role == ADMIN` |
 | `/*` | `web` | `public` | SPA |
 
@@ -472,7 +473,7 @@ Create **new** `auth_network`. **Attach existing** `user_network` (do not create
 | `web` | existing Vite → nginx (`deploy`/`web/Dockerfile`) | `auth_network` only | **none published** (drop `8081`) | SPA, container `:80` |
 | `redis` | `redis:7-alpine` | `auth_network` only | none | `rejected_cache` + OAuth state + rate limits. `redis-server --save "" --appendonly no` |
 | `api` | `deploy/Dockerfile.api` | `auth_network` **and** `user_network` | **none published** (drop `8082`) | `HTTP_ADDR=:8000`. No gRPC. No `DATABASE_URL`. `REDIS_URL=redis://redis:6379/0`. `USER_SERVICE_URL=http://user_service:8000` |
-| `gateway` | `deploy/Dockerfile.gateway` | `auth_network` **and** `user_network` | **`127.0.0.1:8083:8083`** only | YAML listen `:8083`. Redis + `JWT_SECRET`. **No Postgres.** `extra_hosts: host.docker.internal:host-gateway` |
+| `gateway` | `deploy/Dockerfile.gateway` | `auth_network` **and** `user_network` | **`127.0.0.1:8083:8083`** only | YAML listen `:8083`. Redis + `JWT_SECRET`. **No Postgres.** Hermes upstream is `http://hermes:8787` on `auth_network`. |
 
 **Drop** compose service `postgres`, volume `postgres_data`, API/gateway `DATABASE_URL` / `MIGRATIONS_PATH`, published `API_HTTP_PORT` / `WEB_HTTP_PORT`.
 

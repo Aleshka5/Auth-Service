@@ -17,9 +17,12 @@ upstreams:
   api: "http://api:8000"
   web: "http://web:80"
   user_service: "http://user_service:8000"
-  hermes: "http://host.docker.internal:8787"
+  # Hermes container on auth_network (hermes-auth-gateway/docker-compose.yml).
+  hermes: "http://hermes:8787"
   # WebStorage joins auth_network as compose service `app` (external network from that stack).
   storage: "http://app:8000"
+  # LiteLLM proxy on llm_network (external; that stack creates the network).
+  litellm: "http://litellm-proxy-server:4000"
 
 hosts:
   filenkov.store:
@@ -59,10 +62,29 @@ hosts:
       - match: /health
         upstream: api
         auth: public
+      # Any signed-in user: docs/hermes.md. JWT plugin verifies injected Bearer.
+      - match: /hermes
+        upstream: hermes
+        auth: session
+        strip_prefix: /hermes
+        inject_access_jwt: true
+      - match: /hermes/login
+        methods: [GET]
+        auth: session
+        redirect: /hermes/sessions
       - match: /hermes/*
         upstream: hermes
-        auth: admin
+        auth: session
         strip_prefix: /hermes
+        inject_access_jwt: true
+      - match: /chat
+        methods: [GET]
+        auth: session
+        redirect: /hermes/chat
+      - match: /sessions
+        methods: [GET]
+        auth: session
+        redirect: /hermes/sessions
       - match: /admin
         upstream: web
         auth: admin
@@ -84,4 +106,14 @@ hosts:
         auth: public
       - match: /*
         upstream: storage
+        auth: session
+
+  llm.filenkov.store:
+    role_field: global_role
+    # Chat completions may wait a long time before the first response byte.
+    timeouts:
+      proxy: 10m
+    routes:
+      - match: /*
+        upstream: litellm
         auth: session

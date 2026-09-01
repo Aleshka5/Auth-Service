@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,13 +138,20 @@ func TestLoadDefaultYAML(t *testing.T) {
 		t.Fatalf("hosts %v", names)
 	}
 	foundStorage := false
+	foundLLM := false
 	for _, n := range names {
 		if n == "storage.filenkov.store" {
 			foundStorage = true
 		}
+		if n == "llm.filenkov.store" {
+			foundLLM = true
+		}
 	}
 	if !foundStorage {
 		t.Fatal("storage.filenkov.store must be enabled")
+	}
+	if !foundLLM {
+		t.Fatal("llm.filenkov.store must be enabled")
 	}
 	if got := f.Upstreams["api"]; got != "http://api:8000" {
 		t.Fatalf("api upstream %q", got)
@@ -154,13 +162,39 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if got := f.Upstreams["storage"]; got != "http://app:8000" {
 		t.Fatalf("storage upstream %q", got)
 	}
+	if got := f.Upstreams["hermes"]; got != "http://hermes:8787" {
+		t.Fatalf("hermes upstream %q", got)
+	}
+	if got := f.Upstreams["litellm"]; got != "http://litellm-proxy-server:4000" {
+		t.Fatalf("litellm upstream %q", got)
+	}
 	r, err := f.Router()
 	if err != nil {
 		t.Fatal(err)
 	}
 	h, rt, ok := r.Match("filenkov.store", "/hermes/x")
-	if !ok || rt.auth != PolicyAdmin || rt.stripPrefix != "/hermes" {
+	if !ok || rt.auth != PolicySession || rt.stripPrefix != "/hermes" || rt.upstreamName != "hermes" || !rt.injectAccessJWT {
 		t.Fatalf("hermes route: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/chat")
+	if !ok || rt.redirect != "/hermes/chat" || rt.auth != PolicySession {
+		t.Fatalf("chat redirect: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/sessions")
+	if !ok || rt.redirect != "/hermes/sessions" || rt.auth != PolicySession {
+		t.Fatalf("sessions redirect: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/hermes/login")
+	if !ok || rt.redirect != "/hermes/sessions" || rt.auth != PolicySession {
+		t.Fatalf("hermes login skip: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.Match("filenkov.store", "/hermes")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "hermes" {
+		t.Fatalf("hermes exact: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.Match("filenkov.store", "/hermes/")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "hermes" {
+		t.Fatalf("hermes slash: ok=%v %+v", ok, rt)
 	}
 	if h.roleField != "global_role" {
 		t.Fatalf("hub role_field %q", h.roleField)
@@ -215,9 +249,22 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if h.proxyTimeout != 30*time.Minute {
 		t.Fatalf("storage proxy timeout %v", h.proxyTimeout)
 	}
+	h, rt, ok = r.Match("llm.filenkov.store", "/")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "litellm" {
+		t.Fatalf("llm catch-all: ok=%v %+v", ok, rt)
+	}
+	if h.roleField != "global_role" {
+		t.Fatalf("llm role_field %q", h.roleField)
+	}
+	if h.proxyTimeout != 10*time.Minute {
+		t.Fatalf("llm proxy timeout %v", h.proxyTimeout)
+	}
 	m := f.AllowedHostsMap()
 	if _, ok := m["storage.filenkov.store"]; !ok {
 		t.Fatal("return_to allowlist must include storage.filenkov.store")
+	}
+	if _, ok := m["llm.filenkov.store"]; !ok {
+		t.Fatal("return_to allowlist must include llm.filenkov.store")
 	}
 }
 

@@ -1,0 +1,88 @@
+{
+	default_bind 192.168.1.102
+	# HTTP/3 alt-svc breaks browser WebSocket to /hermes/chat (PTY upgrade).
+	servers {
+		protocols h1 h2
+	}
+}
+
+# Reverse proxy: all HTTP traffic gets redirected to HTTPS
+https://llm.filenkov.store {
+	reverse_proxy lite-llm:80
+}
+
+https://storage.filenkov.store {
+	handle {
+		reverse_proxy localhost:8083
+	}
+	tls {
+		protocols tls1.3
+	}
+
+	@notWebsocket {
+		not header Connection *Upgrade*
+	}
+	header @notWebsocket {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+		format json
+	}
+}
+
+https://filenkov.store {
+	handle {
+		reverse_proxy localhost:8083
+	}
+	tls {
+		protocols tls1.3
+	}
+
+	# Drop cached HTTP/3 (old alt-svc ma=2592000) so chat WS uses h1/h2.
+	header {
+		Alt-Svc "clear"
+	}
+
+	# Gateway already sets the same headers. Applying them on 101
+	# Switching Protocols breaks or duplicates the PTY WebSocket handshake.
+	@notWebsocket {
+		not header Connection *Upgrade*
+	}
+	header @notWebsocket {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+		format json
+	}
+}
+
+# Plain HTTP -> HTTPS redirect (for browsers that connect directly to http://)
+http://filenkov.store {
+	redir https://filenkov.store{uri}
+}
+
+http://storage.filenkov.store {
+	redir https://storage.filenkov.store{uri}
+}
+
+http://llm.filenkov.store {
+	redir https://llm.filenkov.store{uri}
+}

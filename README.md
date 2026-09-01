@@ -19,7 +19,7 @@ docs/             auth-gateway.md, user-story-*.md (directory contract, storage 
 
 ## Quick start (Docker Compose)
 
-Start the **User-Service** stack first so external network `user_network` and hostname `user_service` exist. Auth compose **attaches** that network; it does not create User-Service.
+Start the **User-Service** stack first so external network `user_network` and hostname `user_service` exist. Start the **LiteLLM** stack so `llm_network` and hostname `litellm-proxy-server` exist. Auth compose **attaches** those networks; it does not create User-Service or LiteLLM.
 
 1. Copy env and fill Google OAuth + `JWT_SECRET` (≥32 random bytes):
 
@@ -47,9 +47,10 @@ Start the **User-Service** stack first so external network `user_network` and ho
 
    ```bash
    docker compose --env-file .env -f deploy/docker-compose.yml up --build
+   # or: podman compose --env-file .env -f deploy/docker-compose.yml up --build
    ```
 
-   Networks: `auth_network` (created here) + `user_network` (`external: true`). Services: `redis` (`redis:7-alpine`), `web`, `api`, `gateway`.
+   Networks: `auth_network` (created here) + `user_network` (`external: true`) + `llm_network` (`external: true`). Services: `redis` (`redis:7-alpine`), `web`, `api`, `gateway`.
 
    Compose publishes **only** the gateway:
 
@@ -62,9 +63,9 @@ Start the **User-Service** stack first so external network `user_network` and ho
 
    Gateway process health: `GET http://127.0.0.1:8083/healthz` (not the proxied `/health`). API healthcheck: `GET http://127.0.0.1:8000/health` inside the container (Redis ping).
 
-If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail.
+If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail. If `litellm-proxy-server` is down, `llm.filenkov.store` returns a gateway proxy error after a valid session.
 
-Operator order: User-Service stack, Auth stack, Common (WebStorage data volumes), then WebStorage (`app` joins `auth_network` as external so `http://app:8000` resolves).
+Operator order: User-Service stack, LiteLLM stack (so `llm_network` and `litellm-proxy-server` exist), Auth stack, Common (WebStorage data volumes), then WebStorage (`app` joins `auth_network` as external so `http://app:8000` resolves).
 
 ## Host Caddy (TLS only)
 
@@ -82,13 +83,18 @@ storage.filenkov.store {
 	encode gzip
 	reverse_proxy 127.0.0.1:8083
 }
+
+llm.filenkov.store {
+	encode gzip
+	reverse_proxy 127.0.0.1:8083
+}
 ```
 
 If the hub site block already exists, delete `handle /oauth/*`, `handle /api/*`, `handle /health`, `handle /hermes/*`, and the SPA catch-all, then use the single `reverse_proxy` above.
 
 Reload with `sudo systemctl reload caddy` (or `caddy reload --config /etc/caddy/Caddyfile`).
 
-API (`:8000`) and web are **not** published on the host. There is no Caddy rollback to `:8081` / `:8082`. The storage Caddy site is operator config (not in this repo). WebStorage stays unpublished behind the gateway.
+API (`:8000`) and web are **not** published on the host. There is no Caddy rollback to `:8081` / `:8082`. The storage and LLM Caddy sites are operator config (not in this repo). WebStorage and LiteLLM stay unpublished behind the gateway.
 
 ## Local Go (without Compose for the API)
 
@@ -171,7 +177,7 @@ IP rate limits: gateway (default 180/min, YAML) plus API defense in depth (OAuth
 | Refresh | `auth_refresh` | `JWT_REFRESH_TTL` | `168h` |
 | Companion sid | `auth_session` | `JWT_REFRESH_TTL` | `168h` |
 
-Alg **HS256**. Access claims: `sub` (User-Service UUID), `jti`, `typ=access`, `global_role`, `email`, `username`, `iss`=`PUBLIC_ORIGIN`, `aud`=YAML hosts (hub + `storage.filenkov.store`, plus loopback when `AUTH_DEV_HTTP`). Refresh claims: `sub`, `jti`, `typ=refresh`, `iss`/`aud`/`exp` only (no roles). Rotation re-reads User-Service.
+Alg **HS256**. Access claims: `sub` (User-Service UUID), `jti`, `typ=access`, `global_role`, `email`, `username`, `iss`=`PUBLIC_ORIGIN`, `aud`=YAML hosts (hub + `storage.filenkov.store` + `llm.filenkov.store`, plus loopback when `AUTH_DEV_HTTP`). Refresh claims: `sub`, `jti`, `typ=refresh`, `iss`/`aud`/`exp` only (no roles). Rotation re-reads User-Service.
 
 `auth_session` is a random 32-byte hex sid, **not** the access JWT and **not** the user UUID. Redis `session:{sid}` → User-Service UUID. Stable for the login lifetime (not rotated on access refresh). Edge auth ignores it.
 
@@ -196,13 +202,15 @@ The gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` so cli
 | `X-Auth-Name` | JWT `username` (User-Service has no display-name field) |
 | `X-Auth-Role` | JWT `global_role` (hub YAML `role_field: global_role`) |
 
-**Hermes** (`upstream: hermes`) additionally receives `Authorization: Bearer <access cookie>` (overwrites any client `Authorization`) and `X-Forwarded-Prefix` from `strip_prefix`. Other product upstreams do not get the access JWT.
+**Hermes** (`upstream: hermes`) receives `X-Forwarded-Prefix` and, with `inject_access_jwt: true`, the hub access cookie as `Authorization: Bearer` so `hermes-auth-gateway` can verify it. No second login. Chat is a PTY WebSocket — [docs/hermes.md](docs/hermes.md). Other product upstreams do not get the access JWT.
 
 **Storage host** (`storage.filenkov.store`, `role_field: storage`) also sets `X-User-Id` (same UUID) and `X-Storage-Role` from User-Service `GET /users/{id}/roles/storage`. Cookie is forwarded. User-Service errors → 503 (or 401 if the user is gone).
 
+**LiteLLM host** (`llm.filenkov.store`) is a non–User-Service upstream: `X-Auth-*` only, catch-all `auth: session`, 10m proxy timeout. Cookie is forwarded. The access JWT is not sent to LiteLLM.
+
 **User-Service** upstream: strip `Cookie` and `Authorization`; set `X-User-Id` from JWT `sub`. Do not send JWTs.
 
-`/hermes/*` is admin-only at the edge; the `/hermes` prefix is stripped before proxying to Hermes (`host.docker.internal:8787`). Hermes also receives `Authorization: Bearer <access JWT>` and `X-Forwarded-Prefix: /hermes` so it can bind `0.0.0.0` without a second login. Install `deploy/hermes-plugins/auth-gateway` into `HERMES_HOME/plugins` and set `HERMES_DASHBOARD_AUTH_JWT_SECRET` to the same value as `JWT_SECRET`. See [deploy/hermes-plugins/auth-gateway/README.md](deploy/hermes-plugins/auth-gateway/README.md).
+`/hermes/*` is `auth: session` at the edge (any signed-in user; `BLOCKED` / `rejected_cache` still 403). The `/hermes` prefix is stripped before proxying to the Hermes container (`http://hermes:8787` on `auth_network`). Hermes receives `X-Forwarded-Prefix: /hermes` and the injected Bearer. Set `HERMES_DASHBOARD_AUTH_JWT_SECRET` = `JWT_SECRET`. See [docs/hermes.md](docs/hermes.md).
 
 ## Admin (SPA → gateway → User-Service)
 
@@ -224,7 +232,7 @@ Hub edge auth uses access-JWT `global_role`. Per-service roles are User-Service 
 
 ## Gateway routing
 
-YAML: `deploy/gateway.yaml`. First matching route wins. Hosts: `filenkov.store` (hub) and `storage.filenkov.store` (one upstream `http://app:8000`, `/health` public, 30m proxy timeout). Hub `role_field` is `global_role`. `GET /users` (exact) is `auth: admin` → User-Service. `POST /users` and `/users/by-google-sub/*` are `auth: reject` (404 at the gateway). `/users/*` proxies to User-Service (`auth: session`: valid access JWT required). Full schema and Caddy notes: [docs/auth-gateway.md](docs/auth-gateway.md).
+YAML: `deploy/gateway.yaml`. First matching route wins. Hosts: `filenkov.store` (hub), `storage.filenkov.store` (one upstream `http://app:8000`, `/health` public, 30m proxy timeout), and `llm.filenkov.store` (one upstream `http://litellm-proxy-server:4000` on `llm_network`, `auth: session`, 10m proxy timeout). Hub `role_field` is `global_role`. `GET /users` (exact) is `auth: admin` → User-Service. `POST /users` and `/users/by-google-sub/*` are `auth: reject` (404 at the gateway). `/users/*` proxies to User-Service (`auth: session`: valid access JWT required). Full schema and Caddy notes: [docs/auth-gateway.md](docs/auth-gateway.md).
 
 ## What was removed
 

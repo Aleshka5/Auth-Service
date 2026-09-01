@@ -138,15 +138,18 @@ func (s *Server) applyProxyIdentity(pr *httputil.ProxyRequest, t proxyTarget) {
 	}
 }
 
-// injectHermesDashboardAuth gives Hermes a DashboardAuthProvider credential.
-// Hermes refuses non-loopback binds unless a provider is registered, and its
-// gated middleware authenticates HTTP via Authorization Bearer (then session
-// cookies). The browser never sees this header; we copy the already-validated
-// access cookie so Hermes can verify the same HS256 JWT. User-Service still
-// never receives a JWT.
+// injectHermesDashboardAuth gives Hermes the hub access JWT as Bearer.
+// Hermes refuses non-loopback binds unless a DashboardAuthProvider is
+// registered; auth-gateway verifies this token. The browser never sees
+// the header. User-Service still never receives a JWT.
 func injectHermesDashboardAuth(pr *httputil.ProxyRequest, t proxyTarget) {
-	if c, err := pr.In.Cookie(token.CookieAccess); err == nil && strings.TrimSpace(c.Value) != "" {
-		pr.Out.Header.Set("Authorization", "Bearer "+c.Value)
+	// Never forward a client Authorization. A spoofed or stale Bearer is
+	// fatal in Hermes gated middleware (no cookie fallback).
+	pr.Out.Header.Del("Authorization")
+	if t.route.injectAccessJWT {
+		if c, err := pr.In.Cookie(token.CookieAccess); err == nil && strings.TrimSpace(c.Value) != "" {
+			pr.Out.Header.Set("Authorization", "Bearer "+c.Value)
+		}
 	}
 	if prefix := strings.TrimSpace(t.route.stripPrefix); prefix != "" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", prefix)
@@ -228,7 +231,7 @@ func targetUserID(path string) string {
 }
 
 func (s *Server) denyAnonymous(w http.ResponseWriter, r *http.Request) {
-	if wantsJSON(r) {
+	if isWebSocketRequest(r) || wantsJSON(r) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}

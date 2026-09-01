@@ -1,7 +1,0 @@
-name: auth-gateway
-version: 1.0.0
-description: "Dashboard auth provider that verifies the Auth-Service access JWT the gateway injects as Authorization Bearer on /hermes/*. Unlocks hermes dashboard --host 0.0.0.0 without a second login."
-author: Aleksey
-kind: backend
-requires_env:
-  - HERMES_DASHBOARD_AUTH_JWT_SECRET

@@ -39,14 +39,24 @@ describe('Layout', () => {
     renderLayout()
     expect(await screen.findByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/auth')
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Hermes' })).not.toBeInTheDocument()
   })
 
-  it('shows the name and Admin link for admins', async () => {
+  it('shows the name, Admin, and Hermes for admins', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(admin)))
     renderLayout()
     expect(await screen.findByText('Boss')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Admin' })).toHaveAttribute('href', '/admin')
+    expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', '/hermes/chat')
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+  })
+
+  it('shows Hermes but not Admin for signed-in non-admins', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(stranger)))
+    renderLayout()
+    expect(await screen.findByText('Ann')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', '/hermes/chat')
+    expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
   })
 
   it('plays calm-to-angry for guests on home', async () => {

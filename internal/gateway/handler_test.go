@@ -1,9 +1,13 @@
 package gateway
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -25,21 +29,29 @@ import (
 )
 
 type probe struct {
-	method        string
-	path          string
-	host          string
-	rawQuery      string
-	authID        string
-	authEmail     string
-	authName      string
-	authRole      string
-	storageRole   string
-	userID        string
-	cookie        string
+	method          string
+	path            string
+	host            string
+	rawQuery        string
+	authID          string
+	authEmail       string
+	authName        string
+	authRole        string
+	storageRole     string
+	userID          string
+	cookie          string
 	authorization   string
 	spoofedLeft     string
 	forwardedHost   string
 	forwardedPrefix string
+	mu              sync.Mutex
+	responder       func(http.ResponseWriter, *http.Request)
+}
+
+func (p *probe) setResponder(fn func(http.ResponseWriter, *http.Request)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.responder = fn
 }
 
 func newUpstream(t *testing.T) (*httptest.Server, *probe) {
@@ -61,6 +73,13 @@ func newUpstream(t *testing.T) (*httptest.Server, *probe) {
 		p.spoofedLeft = r.Header.Get("X-Auth-Spoof")
 		p.forwardedHost = r.Header.Get("X-Forwarded-Host")
 		p.forwardedPrefix = r.Header.Get("X-Forwarded-Prefix")
+		p.mu.Lock()
+		fn := p.responder
+		p.mu.Unlock()
+		if fn != nil {
+			fn(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"status":"ok"}`)
 	}))
@@ -115,10 +134,22 @@ hosts:
       - match: /health
         upstream: api
         auth: public
+      - match: /hermes/login
+        methods: [GET]
+        auth: session
+        redirect: /hermes/sessions
       - match: /hermes/*
         upstream: hermes
-        auth: admin
+        auth: session
         strip_prefix: /hermes
+      - match: /chat
+        methods: [GET]
+        auth: session
+        redirect: /hermes/chat
+      - match: /sessions
+        methods: [GET]
+        auth: session
+        redirect: /hermes/sessions
       - match: /admin
         upstream: web
         auth: admin
@@ -165,6 +196,11 @@ func newGW(t *testing.T) *gwHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newGWFromFile(t, file, productProbe, userProbe)
+}
+
+func newGWFromFile(t *testing.T, file *File, productProbe, userProbe *probe) *gwHarness {
+	t.Helper()
 	cfg := &config.Config{
 		CookieSecure: false,
 		PublicOrigin: "https://filenkov.store",
@@ -407,15 +443,20 @@ func TestStrangerForbiddenOnAdminRoutes(t *testing.T) {
 	_, raw := hr.login("ann@b.c", "ann", "STRANGER")
 
 	rec := hr.do(withAccess(req(http.MethodGet, "/hermes/"), raw))
-	if rec.Code != http.StatusForbidden {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("hermes status %d %s", rec.Code, rec.Body.String())
 	}
+	if hr.up.path != "/" {
+		t.Fatalf("hermes must proxy, upstream path %q", hr.up.path)
+	}
+
+	hr.up.path = ""
 	rec = hr.do(withAccess(req(http.MethodGet, "/admin"), raw))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("admin status %d", rec.Code)
 	}
 	if hr.up.path != "" {
-		t.Fatalf("must not proxy, upstream path %q", hr.up.path)
+		t.Fatalf("must not proxy admin, upstream path %q", hr.up.path)
 	}
 
 	rec = hr.do(withAccess(req(http.MethodGet, "/api/me"), raw))
@@ -443,11 +484,63 @@ func TestValidJWTInjectsIdentity(t *testing.T) {
 	if hr.up.authID != sub {
 		t.Fatalf("user id %q want %q", hr.up.authID, sub)
 	}
-	if hr.up.authorization != "Bearer "+raw {
-		t.Fatalf("hermes Authorization %q", hr.up.authorization)
+	if hr.up.authorization != "" {
+		t.Fatalf("hermes Authorization %q (must not inject hub JWT; it blocks cookie login)", hr.up.authorization)
 	}
 	if hr.up.forwardedPrefix != "/hermes" {
 		t.Fatalf("X-Forwarded-Prefix %q", hr.up.forwardedPrefix)
+	}
+}
+
+func TestHermesJSONRewritesNextToPublicPrefix(t *testing.T) {
+	hr := newGW(t)
+	hr.up.setResponder(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"next":"/"}`)
+	})
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	r := withAccess(req(http.MethodPost, "/hermes/api/auth/ws-ticket?next=%2F"), raw)
+	r.Header.Set("Content-Type", "application/json")
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["next"] != "/hermes/sessions" {
+		t.Fatalf("next %v want /hermes/sessions", payload["next"])
+	}
+	q, err := url.ParseQuery(hr.up.rawQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Get("next") != "/" {
+		t.Fatalf("upstream next query %q want / (do not rewrite /hermes/sessions down)", hr.up.rawQuery)
+	}
+}
+
+func TestHermesLocationRewritesRootToPublicPrefix(t *testing.T) {
+	hr := newGW(t)
+	hr.up.setResponder(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/login?next=/", http.StatusFound)
+	})
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	rec := hr.do(withAccess(req(http.MethodGet, "/hermes/"), raw))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	loc := rec.Header().Get("Location")
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Path != "/hermes/login" {
+		t.Fatalf("Location path %q", loc)
+	}
+	if u.Query().Get("next") != "/" {
+		t.Fatalf("Location next %q want /", loc)
 	}
 }
 
@@ -460,8 +553,216 @@ func TestHermesOverwritesClientAuthorization(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
 	}
-	if hr.up.authorization != "Bearer "+raw {
+	if hr.up.authorization != "" {
 		t.Fatalf("client Authorization survived: %q", hr.up.authorization)
+	}
+}
+
+func TestHermesLoginSkippedWhenGatewayAuthed(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	rec := hr.do(withAccess(req(http.MethodGet, "/hermes/login"), raw))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/hermes/sessions" {
+		t.Fatalf("Location %q", loc)
+	}
+	if hr.up.path != "" {
+		t.Fatalf("must not proxy Hermes login, upstream %q", hr.up.path)
+	}
+}
+
+func TestHermesChatRedirectsToPublicPrefix(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	rec := hr.do(withAccess(req(http.MethodGet, "/chat"), raw))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/hermes/chat" {
+		t.Fatalf("Location %q", loc)
+	}
+	if hr.up.path != "" {
+		t.Fatalf("redirect must not proxy, upstream %q", hr.up.path)
+	}
+}
+
+func TestHermesLazyAssetsRedirectWhenRefererIsHermes(t *testing.T) {
+	hr := newGW(t)
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	r := withAccess(req(http.MethodGet, "/assets/ChatPage-abc.js"), raw)
+	r.Header.Set("Referer", "https://filenkov.store/hermes/chat")
+	rec := hr.do(r)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/hermes/assets/ChatPage-abc.js" {
+		t.Fatalf("Location %q", loc)
+	}
+	if hr.up.path != "" {
+		t.Fatalf("redirect must not proxy, upstream %q", hr.up.path)
+	}
+}
+
+func TestHubAssetsStayOnHubWithoutHermesReferer(t *testing.T) {
+	hr := newGW(t)
+	r := req(http.MethodGet, "/assets/index.js")
+	r.Header.Set("Referer", "https://filenkov.store/")
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.up.path != "/assets/index.js" {
+		t.Fatalf("upstream path %q", hr.up.path)
+	}
+	if hr.up.forwardedPrefix != "" {
+		t.Fatalf("hub must not get X-Forwarded-Prefix, got %q", hr.up.forwardedPrefix)
+	}
+}
+
+func TestHermesInjectAccessJWTWhenEnabled(t *testing.T) {
+	product, productProbe := newUpstream(t)
+	userSvc, userProbe := newUpstream(t)
+	yml := strings.Replace(
+		string(yamlFor(product.URL, userSvc.URL)),
+		"- match: /hermes/*\n        upstream: hermes\n        auth: session\n        strip_prefix: /hermes",
+		"- match: /hermes/*\n        upstream: hermes\n        auth: session\n        strip_prefix: /hermes\n        inject_access_jwt: true",
+		1,
+	)
+	file, err := Parse([]byte(yml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hr := newGWFromFile(t, file, productProbe, userProbe)
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	rec := hr.do(withAccess(req(http.MethodGet, "/hermes/sessions"), raw))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.up.authorization != "Bearer "+raw {
+		t.Fatalf("inject_access_jwt Authorization %q", hr.up.authorization)
+	}
+}
+
+const wsClientKey = "dGhlIHNhbXBsZSBub25jZQ=="
+
+func wsAcceptKey(clientKey string) string {
+	sum := sha1.Sum([]byte(clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func TestHermesWebSocketUpgrade(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/pty" {
+			http.Error(w, "path "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			http.Error(w, "missing upgrade", http.StatusBadRequest)
+			return
+		}
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "no hijack", http.StatusInternalServerError)
+			return
+		}
+		conn, bufrw, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.WriteString(bufrw, "HTTP/1.1 101 Switching Protocols\r\n")
+		_, _ = io.WriteString(bufrw, "Upgrade: websocket\r\n")
+		_, _ = io.WriteString(bufrw, "Connection: Upgrade\r\n")
+		_, _ = io.WriteString(bufrw, "Sec-WebSocket-Accept: "+wsAcceptKey(r.Header.Get("Sec-WebSocket-Key"))+"\r\n\r\n")
+		_ = bufrw.Flush()
+		_, _ = bufrw.Write([]byte("pty-ok"))
+		_ = bufrw.Flush()
+		time.Sleep(50 * time.Millisecond)
+	}))
+	t.Cleanup(up.Close)
+
+	userSvc, userProbe := newUpstream(t)
+	file, err := Parse(yamlFor(up.URL, userSvc.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hr := newGWFromFile(t, file, &probe{}, userProbe)
+	edge := httptest.NewServer(hr.h)
+	t.Cleanup(edge.Close)
+
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	conn, err := net.Dial("tcp", edge.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	req := "GET /hermes/api/pty?ticket=t HTTP/1.1\r\n" +
+		"Host: filenkov.store\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: " + wsClientKey + "\r\n" +
+		"Sec-WebSocket-Version: 13\r\n" +
+		"Cookie: " + token.CookieAccess + "=" + raw + "\r\n\r\n"
+	if _, err := io.WriteString(conn, req); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status %d want 101", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Upgrade"); !strings.EqualFold(got, "websocket") {
+		t.Fatalf("Upgrade %q", got)
+	}
+	if got := resp.Header.Get("Sec-WebSocket-Accept"); got != wsAcceptKey(wsClientKey) {
+		t.Fatalf("accept %q", got)
+	}
+	if resp.Header.Get("X-Frame-Options") != "" {
+		t.Fatalf("security headers must not be applied to 101, got X-Frame-Options")
+	}
+	buf := make([]byte, 6)
+	if _, err := io.ReadFull(br, buf); err != nil {
+		t.Fatalf("read payload: %v", err)
+	}
+	if string(buf) != "pty-ok" {
+		t.Fatalf("payload %q", buf)
+	}
+}
+
+func TestHermesWebSocketAnonymousIs401(t *testing.T) {
+	hr := newGW(t)
+	edge := httptest.NewServer(hr.h)
+	t.Cleanup(edge.Close)
+	conn, err := net.Dial("tcp", edge.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	req := "GET /hermes/api/pty HTTP/1.1\r\n" +
+		"Host: filenkov.store\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: " + wsClientKey + "\r\n" +
+		"Sec-WebSocket-Version: 13\r\n\r\n"
+	if _, err := io.WriteString(conn, req); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status %d want 401 (not a login redirect)", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "" {
+		t.Fatalf("Location %q — WS must not 302 to /auth", loc)
 	}
 }
 

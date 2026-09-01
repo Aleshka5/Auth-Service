@@ -2,12 +2,14 @@
 
 Auth-Service is the **auth edge** for Filenkov hosts. Caddy stays a thin TLS terminator. Routing, access-JWT checks, identity headers, rate limits, security headers, and JSON access logs live in `cmd/gateway`.
 
+Hermes (`/hermes`, chat PTY): [hermes.md](hermes.md).
+
 ## Goals
 
 - Terminate TLS only in **Caddy** (Let’s Encrypt, HTTP→HTTPS). Caddy reverse-proxies all `filenkov.store` traffic to the gateway.
-- Put **host + path routing** in a YAML config file, not in Go. Adding `llm.filenkov.store` later is a config edit, not a code change. `storage.filenkov.store` is enabled in the default YAML (one upstream `storage` → `http://app:8000`).
+- Put **host + path routing** in a YAML config file, not in Go. `storage.filenkov.store` and `llm.filenkov.store` are enabled in the default YAML (`storage` → `http://app:8000`, `litellm` → `http://litellm-proxy-server:4000`).
 - Enforce **edge auth** before any upstream: no valid access JWT (except `public` routes) and `BLOCKED` / `rejected_cache` never reach a backend on `session`/`admin` routes.
-- Inject trusted identity headers on proxied requests. Strip client-supplied `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` first. **Never forward JWTs to User-Service.** Hermes is the exception: the gateway copies the access cookie into `Authorization: Bearer` so the dashboard auth plugin can satisfy Hermes’s non-loopback bind gate without a second login.
+- Inject trusted identity headers on proxied requests. Strip client-supplied `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` first. **Never forward JWTs to User-Service.** Hermes routes set `inject_access_jwt: true` so the hub access cookie is forwarded as Bearer for `hermes-auth-gateway/plugins/auth-gateway`. Public Hermes + chat: [hermes.md](hermes.md).
 - Keep **`cmd/api`** as the internal auth API (OAuth, `/api/me`, `/api/refresh`, `/api/logout`, `/health`) on unpublished `:8000`. Keep the **nginx SPA container** as an internal upstream. Do not merge the SPA into either Go binary.
 - Rate-limit by IP at the gateway. Keep API rate limits as defense in depth.
 - JSON-capable logs (`slog` JSON), including access logs for Loki.
@@ -15,7 +17,7 @@ Auth-Service is the **auth edge** for Filenkov hosts. Caddy stays a thin TLS ter
 ## Non-goals
 
 - Replacing Caddy ACME / certificate management.
-- Enabling LLM host routes in the default YAML (add when that product is ready).
+- Adding further product hosts beyond hub, storage, and LLM (those three are in the default YAML).
 - Auth Postgres, gRPC `Validate` / `ListUsers`, or `WHITELIST_JSON`. Do not reintroduce them.
 - Using `auth_session` / Redis `session:{sid}` as the **edge** credential. That cookie is a companion opaque sid for product vaults only; the gateway authorizes on the access JWT.
 - Merging the Vite SPA into the API or gateway binary.
@@ -31,8 +33,9 @@ Client
       → api:8000          /oauth/*, /api/*, /health
       → web:80            SPA (public hub + /admin)
       → user_service:8000 /users/*  (Cookie/Authorization stripped; X-User-Id set)
-      → host.docker.internal:8787   /hermes/* (prefix stripped; Bearer access JWT + X-Forwarded-Prefix)
-      → app:8000          storage.filenkov.store (X-Auth-* + X-User-Id + X-Storage-Role; Cookie forwarded)
+      → hermes:8787                 /hermes/* (prefix stripped; Bearer access JWT + X-Forwarded-Prefix)
+      → app:8000                    storage.filenkov.store (X-Auth-* + X-User-Id + X-Storage-Role; Cookie forwarded)
+      → litellm-proxy-server:4000   llm.filenkov.store (X-Auth-*; Cookie forwarded)
 ```
 
 Caddy does **not** choose `/oauth` vs `/api` vs SPA vs Hermes vs `/users`. One `reverse_proxy` to the gateway is enough.
@@ -74,11 +77,11 @@ Auth policies (`auth`):
 
 Hub YAML `role_field` is **`global_role`**. Allowed values on load: `global_role`, `storage`, `resume` (future hosts). Hub injects the access JWT **`global_role`** as `X-Auth-Role` and does not call User-Service per request for hub HTML. When `role_field` is `storage`, the gateway calls `GET /users/{sub}/roles/storage` (no JWT) and sets `X-Storage-Role` plus `X-User-Id` on that host’s upstream.
 
-`strip_prefix` is Caddy `handle_path` semantics: remove that path prefix before proxying (so `/hermes/foo` becomes `/foo` on Hermes).
+`strip_prefix` is Caddy `handle_path` semantics: remove that path prefix before proxying (so `/hermes/foo` becomes `/foo` on Hermes). Hermes already understands `X-Forwarded-Prefix` for cookie Path and asset/base URLs. Hub Hermes routes set `inject_access_jwt: true`; the `auth-gateway` plugin verifies the Bearer. `GET /hermes/login` 302s to `/hermes/sessions`. `GET /chat` and `GET /sessions` 302 to `/hermes/chat` and `/hermes/sessions`. Vite `/assets/*` from a Hermes Referer 302s to `/hermes/assets/*`. JSON `next` of `/` or `/login` becomes `/hermes/sessions`. Details: [hermes.md](hermes.md).
 
 `preserve_host` defaults to `true` (send the public Host to the upstream). User-Service routes set `false` so the upstream sees `user_service`.
 
-### Complete example (`filenkov.store` + `storage.filenkov.store`)
+### Complete example (`filenkov.store` + `storage.filenkov.store` + `llm.filenkov.store`)
 
 See `deploy/gateway.yaml`. Shape:
 
@@ -98,8 +101,9 @@ upstreams:
   api: "http://api:8000"
   web: "http://web:80"
   user_service: "http://user_service:8000"
-  hermes: "http://host.docker.internal:8787"
+  hermes: "http://hermes:8787"
   storage: "http://app:8000"
+  litellm: "http://litellm-proxy-server:4000"
 
 hosts:
   filenkov.store:
@@ -138,10 +142,28 @@ hosts:
       - match: /health
         upstream: api
         auth: public
+      - match: /hermes
+        upstream: hermes
+        auth: session
+        strip_prefix: /hermes
+        inject_access_jwt: true
+      - match: /hermes/login
+        methods: [GET]
+        auth: session
+        redirect: /hermes/sessions
       - match: /hermes/*
         upstream: hermes
-        auth: admin
+        auth: session
         strip_prefix: /hermes
+        inject_access_jwt: true
+      - match: /chat
+        methods: [GET]
+        auth: session
+        redirect: /hermes/chat
+      - match: /sessions
+        methods: [GET]
+        auth: session
+        redirect: /hermes/sessions
       - match: /admin
         upstream: web
         auth: admin
@@ -163,11 +185,22 @@ hosts:
       - match: /*
         upstream: storage
         auth: session
+
+  llm.filenkov.store:
+    role_field: global_role
+    timeouts:
+      proxy: 10m         # chat completions / streaming TTFB
+    routes:
+      - match: /*
+        upstream: litellm
+        auth: session
 ```
 
-Hub public routes (catch-all `auth: public`): `/`, `/auth`, `/architecture`, static SPA assets. Explicit public API: OAuth, `/api/refresh`, `/api/logout`, `/health`. Protected: `/admin`, `/hermes/*`, **`GET /users`** (`admin`); `/api/me` and other `/api/*` (`session`); `/users/*` (`session`). Hidden: **`POST /users`** and `/users/by-google-sub/*` (`reject`). There is **no** `/api/admin/*` route. Hub admin directory: [user-story-admin-directory.md](user-story-admin-directory.md).
+Hub public routes (catch-all `auth: public`): `/`, `/auth`, `/architecture`, static SPA assets. Explicit public API: OAuth, `/api/refresh`, `/api/logout`, `/health`. Protected: `/admin` and **`GET /users`** (`admin`); `/hermes` and `/hermes/*` (session JWT + injected Bearer; [hermes.md](hermes.md)); `/api/me` and other `/api/*` (`session`); `/users/*` (`session`). Hidden: **`POST /users`** and `/users/by-google-sub/*` (`reject`). There is **no** `/api/admin/*` route. Hub admin directory: [user-story-admin-directory.md](user-story-admin-directory.md).
 
 Storage host: `GET /health` is public. Everything else requires a valid access JWT (`auth: session`). Anonymous HTML → **302** hub `/auth?return_to=`; `/api/*` and XHR → **401**. Hub `POST /users` stays **rejected**. Hub `GET /users` is **admin** (not anonymous, not session).
+
+LLM host (`llm.filenkov.store`): one upstream `litellm` → `http://litellm-proxy-server:4000`. Catch-all `auth: session` (anonymous HTML → **302** hub login; `/v1/*` and JSON Accept → **401**). Hub `global_role` is injected as `X-Auth-Role`. Per-host proxy timeout **10m** (slow first token). Do not send the access JWT to LiteLLM.
 
 ## Auth decisions (redirect vs 401 vs 403)
 
@@ -250,11 +283,11 @@ Security headers on **gateway responses** (including proxied ones):
 - `Permissions-Policy: camera=(), microphone=(), geolocation=()`
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains` when cookies are Secure (production)
 
-WebSocket: `httputil.ReverseProxy` already handles `Upgrade`. Do not wrap the handler in `http.TimeoutHandler`. `ReadHeaderTimeout` is header-only so large uploads and hijacked sockets are not killed by it. File-level `timeouts.proxy` is a **response header** timeout (default 60s). A host may override with `hosts.<name>.timeouts.proxy` (storage uses **30m**).
+WebSocket (Hermes chat PTY): see [hermes.md](hermes.md). `httputil.ReverseProxy` handles `Upgrade`. The proxy transport disables `ForceAttemptHTTP2`. `ModifyResponse` and security headers are skipped on `101`. Unauthenticated Upgrade requests get `401` JSON, not a login `302`. Do not wrap the handler in `http.TimeoutHandler`. `ReadHeaderTimeout` is header-only so large uploads and hijacked sockets are not killed by it. File-level `timeouts.proxy` is a **response header** timeout (default 60s). A host may override with `hosts.<name>.timeouts.proxy` (storage uses **30m**; LLM uses **10m**).
 
 ## JWT at the edge
 
-Cookies `auth_access` / `auth_refresh` (`HttpOnly`, `SameSite=Lax`, `Secure` unless `AUTH_DEV_HTTP`). The gateway validates **access** only (signature, `typ`, `exp`, `aud`/`iss`) plus Redis `rejected_cache`. It does not mint tokens. JWT `aud` includes every host in the gateway YAML (so `storage.filenkov.store` is a valid audience).
+Cookies `auth_access` / `auth_refresh` (`HttpOnly`, `SameSite=Lax`, `Secure` unless `AUTH_DEV_HTTP`). The gateway validates **access** only (signature, `typ`, `exp`, `aud`/`iss`) plus Redis `rejected_cache`. It does not mint tokens. JWT `aud` includes every host in the gateway YAML (so `storage.filenkov.store` and `llm.filenkov.store` are valid audiences).
 
 Companion cookie **`auth_session`**: opaque 32-byte hex sid, same cookie flags as the JWTs, TTL = `JWT_REFRESH_TTL`. Redis `session:{sid}` → User-Service UUID. Issued on Google callback; **kept** (TTL extended) on `POST /api/refresh` if the cookie still maps to that user; cleared and deleted on `POST /api/logout` and when the user is revoked. Not checked at the edge — missing sid does not block proxy to storage.
 
@@ -271,15 +304,14 @@ Auth API issues tokens after Google login and on `POST /api/refresh`. It must no
 
 ## Docker topology and env
 
-Compose networks: **`auth_network`** (created here) and **`user_network`** (`external: true`). `web` and `redis` sit only on `auth_network`. `api` and `gateway` attach both so they can reach `user_service:8000`.
+Compose networks: **`auth_network`** (created here), **`user_network`** (`external: true`), and **`llm_network`** (`external: true`). `web` and `redis` sit only on `auth_network`. `api` and `gateway` attach `user_network` so they can reach `user_service:8000`. The gateway also attaches `llm_network` so it can reach `litellm-proxy-server:4000`.
 
-WebStorage’s `app` container must join **`auth_network` as `external: true`** so the gateway can reach `http://app:8000`. Do not publish WebStorage as a second public edge.
+WebStorage’s `app` container must join **`auth_network` as `external: true`** so the gateway can reach `http://app:8000`. Do not publish WebStorage as a second public edge. Hermes is started from `hermes-auth-gateway` compose on the same network (`http://hermes:8787`). Do not publish Hermes `:8787` on a public interface. Dashboard auth: JWT plugin only ([hermes.md](hermes.md)). The LiteLLM stack creates **`llm_network`**; the gateway joins it as `external: true` so `http://litellm-proxy-server:4000` resolves. Do not publish LiteLLM `:4000` on a public interface.
 
-Upstreams use **container names**. Hermes is on the Docker host:
+Upstreams use **container names**. Hermes is the `hermes` container on **`auth_network`** (`hermes-auth-gateway` compose joins that network as `external: true`, default Docker name `deploy_auth_network`):
 
 ```text
-gateway extra_hosts:
-  host.docker.internal: host-gateway   # Linux
+hermes: "http://hermes:8787"
 ```
 
 Published: **`127.0.0.1:8083:8083` only**. API `:8000` and web `:80` are unpublished.
@@ -303,48 +335,62 @@ Do not set `DATABASE_URL`, `GRPC_ADDR`, `ADMIN_EMAIL`, `COOKIE_NAME`, `SESSION_T
 
 Gateway compose healthcheck: `GET http://127.0.0.1:8083/healthz`. API: `GET http://127.0.0.1:8000/health`.
 
-Operator order: User-Service stack (so `user_network` exists), Auth stack, Common (for WebStorage data), then WebStorage (`app` on `auth_network`).
+Operator order: User-Service stack (so `user_network` exists), LiteLLM stack (so `llm_network` and `litellm-proxy-server` exist), Auth stack (creates `auth_network`, joins `user_network` and `llm_network`), `hermes-auth-gateway` compose (Hermes copies plugins into `$HERMES_HOME/plugins/` and joins `auth_network` as `hermes`), Common (for WebStorage data), then WebStorage (`app` on `auth_network`).
 
 ## Migration: Caddyfile
 
-**Before** this gateway, Caddy routed `/oauth`, `/api`, `/health` to a published API port, SPA catch-all to a published web port, `/hermes` to `:8787`.
+Canonical host file: [`deploy/Caddyfile.filenkov`](../deploy/Caddyfile.filenkov). Copy to `/etc/caddy/Caddyfile` (needs sudo).
 
-**Now:** one reverse_proxy to the gateway. HTTP→HTTPS and certificates stay in Caddy. API and web ports are not published.
+One `reverse_proxy localhost:8083` per product host. HTTP→HTTPS and certificates stay in Caddy. **No** `encode gzip`. **No** per-path Hermes handles (do not proxy `/hermes/api/pty` to `:8787`).
+
+Hermes chat WebSocket needs HTTP/1.1 or HTTP/2. HTTP/3 `Alt-Svc` and security headers on `101` break `/hermes/chat` — see [hermes.md](hermes.md).
 
 ```caddy
-filenkov.store {
-	encode gzip
-	reverse_proxy 127.0.0.1:8083
+{
+	servers {
+		protocols h1 h2
+	}
 }
 
-storage.filenkov.store {
-	encode gzip
-	reverse_proxy 127.0.0.1:8083
+https://filenkov.store {
+	reverse_proxy localhost:8083
+	header {
+		Alt-Svc "clear"
+	}
+	@notWebsocket {
+		not header Connection *Upgrade*
+	}
+	header @notWebsocket {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
 }
 ```
 
-If the hub site block already exists, **remove** the per-path `handle` blocks and replace with a single `reverse_proxy 127.0.0.1:8083`. Do not add a second `filenkov.store { }` site. The storage site is **operator Caddy config**, not this repo’s Caddyfile.
-
-Reload: `sudo systemctl reload caddy`.
+Reload: `sudo systemctl reload caddy`. A reload of an **old** on-disk Caddyfile re-enables HTTP/3.
 
 ## Test plan
 
 - **Route matching:** host, path exact vs prefix, `methods:`, `strip_prefix`, first-match-wins, aliases, `auth: reject` → 404 and no proxy. Hub `GET /users` is `admin` + `user_service`; `POST /users` is `reject`. Tests: `TestLoadDefaultYAML`, `TestRouterFirstMatch`, `TestHubUsersListAdminOnly`, `TestHubUsersListProxiesWithXUserId`.
-- **Auth:** anonymous `public` OK; anonymous `session`/`admin` → redirect (HTML) or 401 (`/api/*`, `/users/*`, JSON Accept, `X-Requested-With`); STRANGER on `/hermes` and `/admin` → 403; ADMIN OK; BLOCKED → 403 on session/admin routes; BLOCKED still served on `public`.
+- **Auth:** anonymous `public` OK; anonymous `session`/`admin` → redirect (HTML) or 401 (`/api/*`, `/users/*`, JSON Accept, `X-Requested-With`); STRANGER on `/hermes` → 200 (session); STRANGER on `/admin` → 403; ADMIN OK; BLOCKED → 403 on session/admin routes; BLOCKED still served on `public`.
 - **JWT / cache:** invalid signature → anonymous; rejected jti → 401 on session routes; `rejected:user:` after role PUT → 403; refresh/logout stay `public`.
 - **Headers:** strip spoofed `X-Auth-*` / `X-User-Id` / `X-Storage-Role`; inject id/email/username/`global_role` for non–User-Service; storage host also gets `X-User-Id` + `X-Storage-Role` from User-Service (not `global_role`); User-Service gets `X-User-Id` only and no cookies; storage receives `auth_session`.
 - **Storage host:** anonymous HTML → 302 hub login; `/health` public; User-Service role GET 5xx → 503; per-host proxy timeout 30m.
 - **Companion cookie:** issued on login, stable across access refresh, cleared on logout.
-- **Open redirect:** `return_to` only for hosts in the YAML (and `PUBLIC_ORIGIN`; loopback if `AUTH_DEV_HTTP`), including `storage.filenkov.store`.
-- **Proxy:** httptest upstream sees the path after strip; `Host` preserved by default; User-Service `preserve_host: false`.
+- **Open redirect:** `return_to` only for hosts in the YAML (and `PUBLIC_ORIGIN`; loopback if `AUTH_DEV_HTTP`), including `storage.filenkov.store` and `llm.filenkov.store`.
+- **LLM host:** anonymous HTML → 302 hub login; session JWT → proxy to `http://litellm-proxy-server:4000` with `X-Auth-*`; per-host proxy timeout 10m.
+- **Proxy:** httptest upstream sees the path after strip; `Host` preserved by default; User-Service `preserve_host: false`. Hermes: injected Bearer, login skip, `/chat`/`/sessions` redirects, Vite `/assets` Referer redirect, JSON `next` `/` → `/hermes/sessions`, WebSocket 101 (`TestHermesInjectAccessJWTWhenEnabled`, `TestHermesLoginSkippedWhenGatewayAuthed`, `TestHermesLazyAssetsRedirectWhenRefererIsHermes`, `TestHermesWebSocketUpgrade`).
 - **Health:** `/healthz` is local even when `/health` is a proxied API route.
 - `go test ./...` for API + gateway. Frontend: `cd web && npm test`.
 
 ## Rollout
 
-1. Start User-Service so `user_network` exists. Deploy compose (`redis`, `web`, `api`, `gateway`). Confirm `127.0.0.1:8083/healthz` and a browser hit through Caddy (or `curl -H Host:filenkov.store`).
+1. Start User-Service so `user_network` exists, and the LiteLLM stack so `llm_network` and `litellm-proxy-server` exist. Recreate Auth compose (`redis`, `web`, `api`, `gateway`) so the gateway joins `llm_network`. Confirm `127.0.0.1:8083/healthz` and a browser hit through Caddy (or `curl -H Host:filenkov.store`).
 2. Switch Caddy to `reverse_proxy 127.0.0.1:8083`. Reload.
-3. Smoke: public home, Google login (JWT cookies **and** `auth_session`), `/api/me`, `/admin` directory list (`GET /users`) + `PUT /users/{id}/role`, `/hermes/` (admin), anonymous `/admin` → login. Confirm `/api/admin` is 404 and `POST /users` is 404. Hit `Host: storage.filenkov.store` with a valid access JWT and confirm `X-Storage-Role` / `X-User-Id`.
+3. Smoke: public home, Google login (JWT cookies **and** `auth_session`), `/api/me`, `/admin` directory list (`GET /users`) + `PUT /users/{id}/role`, `/hermes/` (any signed-in user), anonymous `/admin` → login. Confirm `/api/admin` is 404 and `POST /users` is 404. Hit `Host: storage.filenkov.store` with a valid access JWT and confirm `X-Storage-Role` / `X-User-Id`. Hit `Host: llm.filenkov.store` with a valid access JWT and confirm proxy to LiteLLM plus `X-Auth-*`.
 
 ## Product services
 

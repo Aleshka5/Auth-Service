@@ -39,4 +39,11 @@ describe('Auth', () => {
     expect(await screen.findByText(/already signed in as/i)).toBeInTheDocument()
     expect(screen.getByText('Ann')).toBeInTheDocument()
   })
+
+  it('links a signed-in user back to same-origin return_to', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(stranger)))
+    renderAuth('/auth?return_to=/hermes/')
+    const btn = await screen.findByRole('link', { name: /Continue to destination/i })
+    expect(btn).toHaveAttribute('href', '/hermes/')
+  })
 })

@@ -1,5 +1,7 @@
 # Start the User-Service stack first so external user_network and
 # hostname user_service exist. Auth does not create User-Service.
+# Start the LiteLLM stack so external llm_network and hostname
+# litellm-proxy-server exist before this compose.
 
 services:
   redis:
@@ -87,9 +89,12 @@ services:
     networks:
       - auth_network
       - user_network
+      - llm_network
 
 networks:
   auth_network:
     driver: bridge
   user_network:
+    external: true
+  llm_network:
     external: true

@@ -107,22 +107,26 @@ type Host struct {
 }
 
 type Route struct {
-	Match        string   `yaml:"match"`
-	Upstream     string   `yaml:"upstream"`
-	Auth         string   `yaml:"auth"`
-	StripPrefix  string   `yaml:"strip_prefix"`
-	PreserveHost *bool    `yaml:"preserve_host"`
-	Methods      []string `yaml:"methods"`
+	Match           string   `yaml:"match"`
+	Upstream        string   `yaml:"upstream"`
+	Auth            string   `yaml:"auth"`
+	StripPrefix     string   `yaml:"strip_prefix"`
+	PreserveHost    *bool    `yaml:"preserve_host"`
+	Methods         []string `yaml:"methods"`
+	InjectAccessJWT *bool    `yaml:"inject_access_jwt"`
+	Redirect        string   `yaml:"redirect"`
 }
 
 type compiledRoute struct {
-	match        string
-	upstreamName string
-	upstream     *url.URL
-	auth         string
-	stripPrefix  string
-	preserveHost bool
-	methods      []string
+	match           string
+	upstreamName    string
+	upstream        *url.URL
+	auth            string
+	stripPrefix     string
+	preserveHost    bool
+	methods         []string
+	injectAccessJWT bool
+	redirect        string
 }
 
 type compiledHost struct {
@@ -294,6 +298,21 @@ func compileRoute(host string, i int, rt Route, upstreams map[string]string) (co
 			methods: methods,
 		}, nil
 	}
+	redirect := strings.TrimSpace(rt.Redirect)
+	if redirect != "" {
+		if !strings.HasPrefix(redirect, "/") {
+			return compiledRoute{}, fmt.Errorf("%s: redirect must start with /", prefix)
+		}
+		if strings.Contains(redirect, "://") {
+			return compiledRoute{}, fmt.Errorf("%s: redirect must be a same-origin path", prefix)
+		}
+		return compiledRoute{
+			match:    match,
+			auth:     auth,
+			methods:  methods,
+			redirect: redirect,
+		}, nil
+	}
 	upName := strings.TrimSpace(rt.Upstream)
 	if upName == "" {
 		return compiledRoute{}, fmt.Errorf("%s: upstream is required", prefix)
@@ -314,14 +333,19 @@ func compileRoute(host string, i int, rt Route, upstreams map[string]string) (co
 	if strip != "" && !strings.HasPrefix(strip, "/") {
 		return compiledRoute{}, fmt.Errorf("%s: strip_prefix must start with /", prefix)
 	}
+	injectJWT := false
+	if rt.InjectAccessJWT != nil {
+		injectJWT = *rt.InjectAccessJWT
+	}
 	return compiledRoute{
-		match:        match,
-		upstreamName: upName,
-		upstream:     u,
-		auth:         auth,
-		stripPrefix:  strings.TrimSuffix(strip, "/"),
-		preserveHost: preserve,
-		methods:      methods,
+		match:           match,
+		upstreamName:    upName,
+		upstream:        u,
+		auth:            auth,
+		stripPrefix:     strings.TrimSuffix(strip, "/"),
+		preserveHost:    preserve,
+		methods:         methods,
+		injectAccessJWT: injectJWT,
 	}, nil
 }
 

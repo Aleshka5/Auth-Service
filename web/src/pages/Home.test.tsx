@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '../auth'
 import { Home } from './Home'
-import { admin, jsonResponse, stranger } from '../test/fixtures'
+import { jsonResponse, stranger } from '../test/fixtures'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -39,12 +39,11 @@ describe('Home', () => {
     expect(screen.getByRole('link', { name: /Auth Gateway/i })).toHaveAttribute('href', '/architecture/auth-gateway')
   })
 
-  it('shows Hermes for admins', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(admin)))
+  it('shows Hermes for signed-in users', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(stranger)))
     renderHome()
     const hermes = await screen.findByRole('link', { name: 'Open Hermes' })
-    expect(hermes).toHaveAttribute('href', '/hermes/')
-    expect(screen.queryByText(stranger.username)).not.toBeInTheDocument()
+    expect(hermes).toHaveAttribute('href', '/hermes/chat')
   })
 
   it('opens a branch from the business line to the technical detail', async () => {
