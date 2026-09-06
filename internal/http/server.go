@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/aleshka5/auth-service/internal/config"
+	"github.com/aleshka5/auth-service/internal/llm"
 	"github.com/aleshka5/auth-service/internal/oauth"
 	"github.com/aleshka5/auth-service/internal/ratelimit"
 	"github.com/aleshka5/auth-service/internal/rejected"
@@ -26,6 +27,7 @@ type Server struct {
 	limiter   *ratelimit.Limiter
 	pingRedis func() error
 	sessions  *sid.Store
+	chat      *llm.Client
 }
 
 func New(
@@ -50,6 +52,13 @@ func New(
 	}
 }
 
+// WithChat attaches the owl chat client. Without it POST /api/chat answers 503
+// and the rest of the API is unaffected.
+func (s *Server) WithChat(c *llm.Client) *Server {
+	s.chat = c
+	return s
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	oauthLim := s.limit("oauth", 10)
@@ -61,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/logout", apiLim(http.HandlerFunc(s.handleLogout)))
 	mux.Handle("POST /api/refresh", apiLim(http.HandlerFunc(s.handleRefresh)))
 	mux.Handle("GET /api/me", apiLim(http.HandlerFunc(s.handleMe)))
+	mux.Handle("POST /api/chat", apiLim(http.HandlerFunc(s.handleChat)))
 
 	return mux
 }

@@ -1,0 +1,332 @@
+/* --- the owl chat -------------------------------------------------------- */
+
+/* The hero owl is a control now, so the slot has to let clicks through to it
+   while staying a plain grid cell. It is also the bubble's anchor. */
+.owl-slot {
+  position: relative;
+  pointer-events: none;
+}
+
+.owl-hero-button {
+  width: 128px;
+  height: 128px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  pointer-events: auto;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.owl-hero-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+/* Docked, the hero has faded out — it must stop taking clicks with it. */
+[data-owl='docked'] .owl-hero-button {
+  pointer-events: none;
+}
+
+/* --- the greeting bubble --- */
+
+.owl-bubble {
+  position: absolute;
+  left: calc(50% + 76px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5; /* the sticky spine paints later in the flow; the greeting wins */
+  max-width: min(280px, 42vw);
+  padding: var(--s3) var(--s4);
+  padding-right: var(--s5);
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-size: var(--step--1);
+  line-height: 1.45;
+  pointer-events: auto;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 12%);
+  /* The text grows a letter at a time; reserve two lines' worth of height so
+     the article below does not shuffle upward on every tick. */
+  min-height: 3.4em;
+}
+
+.owl-bubble::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translateY(-50%) rotate(45deg);
+  border-left: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  background: inherit;
+}
+
+.owl-bubble-close {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--ink-muted);
+  font-size: var(--step-0);
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+[data-owl='docked'] .owl-bubble {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur) var(--ease);
+}
+
+@media (max-width: 760px) {
+  .owl-bubble {
+    left: 50%;
+    top: calc(100% - 4px);
+    transform: translateX(-50%);
+    max-width: min(320px, 88vw);
+  }
+
+  .owl-bubble::before {
+    left: 50%;
+    top: -6px;
+    transform: translateX(-50%) rotate(135deg);
+  }
+}
+
+/* --- the panel --- */
+
+.owl-chat {
+  position: fixed;
+  right: 24px;
+  bottom: max(88px, calc(env(safe-area-inset-bottom) + 72px));
+  z-index: 20;
+  width: min(380px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 20%);
+  overflow: hidden;
+}
+
+.owl-chat-loading {
+  padding: var(--s4);
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.owl-chat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.owl-chat-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.owl-chat-close {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--ink-muted);
+  font-size: var(--step-1);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.owl-chat-body {
+  padding: var(--s4);
+  max-height: min(46vh, 340px);
+  overflow-y: auto;
+  font-size: var(--step--1);
+  line-height: 1.55;
+}
+
+.owl-chat-hint,
+.owl-chat-question {
+  color: var(--ink-muted);
+}
+
+.owl-chat-question {
+  margin: 0 0 var(--s3);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--accent);
+}
+
+/* The answer is rendered markdown now, so it is a block container rather than
+   one paragraph. Its children carry the spacing. */
+.owl-chat-answer > *:first-child {
+  margin-top: 0;
+}
+
+.owl-chat-answer > *:last-child {
+  margin-bottom: 0;
+}
+
+.owl-chat-para {
+  margin: 0 0 var(--s3);
+  /* Soft line breaks inside a paragraph are meaningful in a chat answer. */
+  white-space: pre-wrap;
+}
+
+.owl-chat-heading {
+  margin: var(--s3) 0 var(--s2);
+  font-size: var(--step-0);
+  line-height: 1.3;
+}
+
+.owl-chat-list {
+  margin: 0 0 var(--s3);
+  padding-left: var(--s5);
+}
+
+.owl-chat-list li {
+  margin-bottom: var(--s1);
+}
+
+.owl-chat-list .owl-chat-list {
+  margin: var(--s1) 0 0;
+}
+
+.owl-chat-quote {
+  margin: 0 0 var(--s3);
+  padding-left: var(--s3);
+  border-left: 2px solid var(--rule);
+  color: var(--ink-muted);
+}
+
+.owl-chat-code {
+  padding: 0.1em 0.35em;
+  border-radius: 5px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+.owl-chat-pre {
+  margin: 0 0 var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--paper);
+  /* Code sets its own width; the panel must not grow with it. */
+  overflow-x: auto;
+}
+
+.owl-chat-pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  white-space: pre;
+}
+
+.owl-chat-rule {
+  margin: var(--s3) 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.owl-chat-table-wrap {
+  margin: 0 0 var(--s3);
+  overflow-x: auto;
+}
+
+.owl-chat-table {
+  border-collapse: collapse;
+  font-size: var(--step--1);
+}
+
+.owl-chat-table th,
+.owl-chat-table td {
+  padding: var(--s1) var(--s2);
+  border: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+
+.owl-chat-table th {
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.owl-chat-ref {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.owl-chat-wait {
+  color: var(--ink-muted);
+}
+
+.owl-chat-error {
+  margin: var(--s3) 0 0;
+  color: var(--danger);
+}
+
+.owl-chat-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4) var(--s4);
+  border-top: 1px solid var(--rule);
+}
+
+.owl-chat-input {
+  width: 100%;
+  resize: none;
+  padding: var(--s3);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--paper);
+  color: inherit;
+  font: inherit;
+  font-size: var(--step--1);
+}
+
+.owl-chat-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.owl-chat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+}
+
+.owl-chat-count {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  font-variant-numeric: tabular-nums;
+}
+
+.owl-chat-count.is-low {
+  color: var(--danger);
+}
+
+@media (max-width: 760px) {
+  .owl-chat {
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+}

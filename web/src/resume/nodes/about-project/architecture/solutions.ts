@@ -1,8 +1,12 @@
 /**
- * The boxes on the architecture map. Ten near-identical pages would be ten
- * folders for no benefit, so they stay a data array and the node serves
+ * The boxes on the architecture map. A dozen near-identical pages would be a
+ * dozen folders for no benefit, so they stay a data array and the node serves
  * `/about-project/architecture/:slug` from it (§9.4). Imported by `meta.ts`,
  * so this file must stay free of React and of asset imports.
+ *
+ * The order follows the map: edge first, then the per-host lanes, then the
+ * shared data plane. A box that leaves the diagram leaves this array too — an
+ * unknown slug resolves to null and the reader is sent back to the root.
  */
 export type ArchitectureSolution = {
   slug: string
@@ -13,57 +17,79 @@ export type ArchitectureSolution = {
 
 export const architectureSolutions: ArchitectureSolution[] = [
   {
+    slug: 'caddy-https',
+    title: 'Caddy HTTPS',
+    summary:
+      'The only box on the external network. Terminates TLS with Let’s Encrypt on :80/:443 and hands every host to the gateway — it decides nothing.',
+  },
+  {
     slug: 'auth-gateway',
     title: 'Auth Gateway',
-    summary: 'Google OAuth2 hub at filenkov.store/auth. Caddy terminates TLS; this gateway routes and injects identity.',
+    summary:
+      'Go, :8083. The single place identity is decided: YAML host/path routing, access-JWT check, incoming X-Auth-* stripped and its own injected.',
     href: '/auth',
   },
   {
-    slug: 'caddy-https',
-    title: 'Caddy HTTPS',
-    summary: 'TLS at the edge with Let’s Encrypt. Reverse-proxies every host to this service’s gateway.',
-  },
-  {
-    slug: 'auth-db',
-    title: 'User-Service',
-    summary: 'Directory of people (UUID, google_sub, username, roles). Auth has no Postgres. Gateway X-Auth-Role is the access-JWT global_role.',
-  },
-  {
     slug: 'auth-cache',
-    title: 'Auth Cache',
-    summary: 'Redis rejected tokens, OAuth state, and IP rate limits.',
+    title: 'Rejected cache',
+    summary:
+      'Redis on auth_network. Rejected tokens by jti and by user, OAuth CSRF state, IP rate-limit counters, and the auth_session → user map.',
   },
   {
-    slug: 'role-manager',
-    title: 'Role Manager',
-    summary: 'Admin UI to raise or BLOCK a role on one host without touching the others.',
+    slug: 'hub',
+    title: 'Hub (filenkov.store)',
+    summary:
+      'This page. A static Vue/Vite container on :80 plus the internal Go auth API on :8000 — OAuth, /api/me, refresh, logout. Neither port is published.',
   },
   {
     slug: 'storage',
     title: 'Storage',
-    summary: 'Home file cloud. Sits behind the gateway and trusts X-Auth-* headers; blobs on shared MinIO.',
+    summary:
+      'storage.filenkov.store: a Python app on :8000 behind its own SPA. Gets X-User-Id and X-Storage-Role from the gateway, blobs on the shared MinIO.',
     href: 'https://storage.filenkov.store',
   },
   {
+    slug: 'mlflow',
+    title: 'MLflow',
+    summary:
+      'Experiment tracking on :5000, reached with client-certificate validation rather than the browser cookie. Artifacts to MinIO, metadata to the shared Postgres.',
+  },
+  {
+    slug: 'hermes',
+    title: 'Hermes',
+    summary:
+      'Agent workspace on :8787. The gateway injects Authorization: Bearer with the same access JWT, so there is no second login. Talks to MLflow and LiteLLM.',
+    href: '/hermes/sessions',
+  },
+  {
     slug: 'llm',
-    title: 'LLM',
-    summary: 'Personal model workspace. Same cookie, own database, identity injected at the edge.',
+    title: 'LiteLLM',
+    summary:
+      'llm.filenkov.store → LiteLLM on :4000, fronting the local model runners on :4001 and :4002. Same cookie at the edge, own network, no token downstream.',
     href: 'https://llm.filenkov.store',
   },
   {
-    slug: 'resume',
-    title: 'Resume Page',
-    summary: 'Vacancy-aware resume and cover-letter studio. Will grow its own architecture page.',
+    slug: 'user-service',
+    title: 'User-Service',
+    summary:
+      'The directory of people on user_network — UUID, google_sub, username, global and per-service roles — with its own Postgres and Redis. Never sees a JWT.',
+  },
+  {
+    slug: 'common-data',
+    title: 'Common Postgres & Redis',
+    summary:
+      'One Postgres and one Redis on common_network, shared by the product services. Each keeps its own schema; none of them keeps a session.',
   },
   {
     slug: 'minio',
     title: 'Common MinIO S3',
-    summary: 'Shared object store: home_storage, resume artifacts, and service backups.',
+    summary: 'Shared object store on :9000 — home_storage buckets, MLflow artifacts, and service backups.',
   },
   {
-    slug: 'dns',
-    title: 'DNS',
-    summary: 'filenkov.store and the product subdomains. The map starts here.',
+    slug: 'observability',
+    title: 'Prometheus & Grafana',
+    summary:
+      'observability_network. Prometheus scrapes the badged services — gateway, storage, Hermes, User-Service — and Grafana reads Prometheus. Nothing scrapes from outside.',
   },
 ]
 

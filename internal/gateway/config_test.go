@@ -207,6 +207,14 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if !ok || rt.auth != PolicySession {
 		t.Fatalf("api me: ok=%v %+v", ok, rt)
 	}
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodPost, "/api/chat")
+	if !ok || rt.auth != PolicyPublic || rt.match != "/api/chat" || rt.upstreamName != "api" {
+		t.Fatalf("owl chat must be public and ahead of /api/*: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/api/chat")
+	if !ok || rt.auth != PolicySession || rt.match != "/api/*" {
+		t.Fatalf("only POST /api/chat is public: ok=%v %+v", ok, rt)
+	}
 	_, rt, ok = r.Match("filenkov.store", "/api/refresh")
 	if !ok || rt.auth != PolicyPublic || rt.match != "/api/refresh" {
 		t.Fatalf("refresh: ok=%v %+v", ok, rt)

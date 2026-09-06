@@ -39,6 +39,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       USER_SERVICE_URL: http://user_service:8000
       GATEWAY_CONFIG: /etc/auth/gateway.yaml
+      # Owl chat. LLM_API_KEY and LLM_MODEL come from ../.env.
+      LLM_HOST: ${LLM_HOST}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT}
     volumes:
       - ./gateway.yaml:/etc/auth/gateway.yaml:ro
     depends_on:
@@ -53,6 +58,8 @@ services:
     networks:
       - auth_network
       - user_network
+      # The owl chat calls litellm-proxy-server directly, not through the edge.
+      - llm_network
 
   gateway:
     build:

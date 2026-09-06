@@ -52,25 +52,48 @@ function MapBody() {
 
       <Figure
         src={architectureUrl}
-        alt="Filenkov service map: Caddy TLS in front of the Auth Gateway, product hosts, databases, Redis cache, and MinIO."
-        caption="The live map. Scroll it sideways if the screen is narrow."
-        scroll
+        alt="Service map: Caddy terminating TLS on the external network, then the Go auth gateway routing filenkov.store, storage.filenkov.store and llm.filenkov.store to their containers, with User-Service, a shared Postgres, Redis and MinIO, and a Prometheus/Grafana network below."
+        caption="The shape of it at a glance — open the full map for the labels."
       />
 
       <p>
-        Read it left to right. DNS points the hub and its subdomains at one machine; Caddy terminates TLS
-        there and does nothing clever afterwards — it hands every request to the Go auth gateway. The
-        gateway is the only component that decides anything about identity: it matches the host and path
-        against a YAML route list, checks the access JWT when the route is not public, strips whatever{' '}
-        <code>X-Auth-*</code> headers the client tried to send, and injects its own. Everything to the right
-        of it — the storage host, the model workspace, this resume — is a plain service that trusts those
-        headers and never sees a token.
+        The diagram is drawn far wider than a column of prose, so it is here at the size of the column and{' '}
+        <a href={architectureUrl} target="_blank" rel="noreferrer">
+          full size in its own tab
+        </a>
+        . The paragraphs below say the same thing in words, and they are the version worth reading if you
+        are on a phone.
       </p>
 
       <p>
-        The consequence worth noticing is that adding a product is a config change. A new host gets a block
-        in the routing file and a container on the network; it does not get its own login, its own session
-        store, or its own opinion about roles.
+        There is one line across the top and everything interesting is under it. On the external network
+        Caddy holds the certificates and terminates TLS on <code>:80</code> and <code>:443</code>; it does
+        nothing clever afterwards. Every host it answers for is handed to the same Go gateway on{' '}
+        <code>:8083</code>, which is the only component that decides anything about identity: it matches
+        host and path against a YAML route list, checks the access JWT when the route is not public, looks
+        the token up in the rejected cache next to it, strips whatever <code>X-Auth-*</code> headers the
+        client tried to send, and injects its own.
+      </p>
+
+      <p>
+        Below the gateway the map fans out into one lane per host, and each lane is its own compose
+        network. <code>filenkov.store</code> is this SPA plus the internal auth API that talks to Google.{' '}
+        <code>storage.filenkov.store</code> is the file cloud, which additionally receives the role it is
+        allowed to act on rather than the hub role. <code>llm.filenkov.store</code> is LiteLLM in front of
+        the local model runners. Hermes gets the access JWT as a bearer header so the agent workspace does
+        not ask for a second login, and MLflow sits behind client-certificate validation instead of the
+        cookie. None of these services sees a token it has to verify itself, and none of them holds a
+        session.
+      </p>
+
+      <p>
+        The bottom row is the part that is deliberately boring. User-Service owns the people — UUID,{' '}
+        <code>google_sub</code>, username, roles — on its own network with its own Postgres and Redis, and
+        it is the one component that is never sent a JWT. Next to it a shared Postgres, Redis and MinIO
+        back the products themselves, and a separate observability network scrapes whatever exposes
+        metrics. The consequence worth noticing is that adding a product is a config change: a new host
+        gets a block in the routing file and a container on the network. It does not get its own login,
+        its own session store, or its own opinion about roles.
       </p>
 
       <ul>

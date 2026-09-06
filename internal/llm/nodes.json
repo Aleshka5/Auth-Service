@@ -1,0 +1,147 @@
+[
+  {
+    "path": "/",
+    "title": "Alexey Filenkov",
+    "teaser": "The visit card. Everything else is one click down a branch."
+  },
+  {
+    "path": "/about-project",
+    "title": "About this project",
+    "teaser": "This site is one of the projects on the map. What it runs on, and why it is a tree instead of one long page."
+  },
+  {
+    "path": "/about-project/architecture",
+    "title": "Architecture",
+    "teaser": "The live service map, box by box: TLS at the edge, the gateway, the product hosts, and the shared data plane under them."
+  },
+  {
+    "path": "/about-project/site-stack",
+    "title": "Site stack",
+    "teaser": "React and Vite in a static nginx container, behind a Go gateway that routes by YAML and injects identity."
+  },
+  {
+    "path": "/about-project/why-a-tree",
+    "title": "Why a tree",
+    "teaser": "A scrolling resume gives every reader the same words in the same order. A tree lets each one choose."
+  },
+  {
+    "path": "/achievements",
+    "title": "Achievements",
+    "teaser": "What the work produced: measured numbers, and the services that run behind this domain."
+  },
+  {
+    "path": "/achievements/numbers",
+    "title": "The numbers",
+    "teaser": "Four outcomes from Sber and AeroClub, each with the measurement behind it."
+  },
+  {
+    "path": "/achievements/projects",
+    "title": "Projects",
+    "teaser": "Services on one domain, one Google sign-in, and roles that stop at the host that granted them."
+  },
+  {
+    "path": "/achievements/projects/auth-hub",
+    "title": "Auth hub",
+    "teaser": "One Google sign-in. The Auth Gateway sits in front of Filenkov hosts — no tokens in the URL."
+  },
+  {
+    "path": "/achievements/projects/llm",
+    "title": "LLM",
+    "teaser": "Personal LLM workspace behind the same auth gate."
+  },
+  {
+    "path": "/achievements/projects/resume-studio",
+    "title": "Resume studio",
+    "teaser": "AI resume and cover-letter generator: chat a vacancy, get a tailored PDF."
+  },
+  {
+    "path": "/achievements/projects/storage",
+    "title": "Storage",
+    "teaser": "Home cloud for family files — same sign-in, roles that stay on this host."
+  },
+  {
+    "path": "/experience",
+    "title": "Experience",
+    "teaser": "Five years, two companies: mail routing and extraction, then agent graphs that write reports."
+  },
+  {
+    "path": "/experience/aeroclub",
+    "title": "AeroClub",
+    "teaser": "Middle LLM Engineer. Mail routing fully automated: 85% precision, 80% recall on new data."
+  },
+  {
+    "path": "/experience/aeroclub/human-in-the-loop",
+    "title": "Human-in-the-loop framework",
+    "teaser": "One framework for agent logic, LabelStudio for hard cases, RabbitMQ for the async loop."
+  },
+  {
+    "path": "/experience/aeroclub/mail-routing",
+    "title": "Multi-label mail routing",
+    "teaser": "Mistral Large, prompt-only. No fine-tune for the production scores."
+  },
+  {
+    "path": "/experience/aeroclub/ner",
+    "title": "NER at 80%+",
+    "teaser": "Entity extraction on new mail, again prompt-only, then shipped behind FastAPI."
+  },
+  {
+    "path": "/experience/education",
+    "title": "Education",
+    "teaser": "MAI, Data Science and ML. Before that MPEI, Computer Systems and Engineering."
+  },
+  {
+    "path": "/experience/sber",
+    "title": "Sber",
+    "teaser": "Middle+ AI Agents. Automated reporting: ~1M ₽/year saved at 1,000 reports a week."
+  },
+  {
+    "path": "/experience/sber/cheaper-tokens",
+    "title": "2× cheaper tokens",
+    "teaser": "A graph rewrite cut one report from 60,000 to 30,000 tokens, at the same output quality."
+  },
+  {
+    "path": "/experience/sber/mcp-tools",
+    "title": "Tools as MCP",
+    "teaser": "Agent tools live in a separate MCP service — two product services, one tool layer."
+  },
+  {
+    "path": "/experience/sber/report-memory",
+    "title": "Reports that remember",
+    "teaser": "Memory links reports to each other; RAG covers the domain so later runs stay consistent."
+  },
+  {
+    "path": "/for-interviewer",
+    "title": "For interviewer",
+    "teaser": "The short path: what I build with, how I take a task from ask to shipped, and the logistics."
+  },
+  {
+    "path": "/for-interviewer/how-i-work",
+    "title": "How I work",
+    "teaser": "From a business ask to a shipped agent: how I scope, how I review, and what I need from a team."
+  },
+  {
+    "path": "/for-interviewer/logistics",
+    "title": "Logistics",
+    "teaser": "Years, English, and how to reach me — the first five minutes of a screening call, in a list."
+  },
+  {
+    "path": "/for-interviewer/stack",
+    "title": "Stack",
+    "teaser": "Three layers: agents that do the work, a backend that can be trusted, an edge that puts it on one domain."
+  },
+  {
+    "path": "/for-interviewer/stack/ai-agents",
+    "title": "AI agents",
+    "teaser": "Agents that route work, extract facts, and write reports without a human in every loop."
+  },
+  {
+    "path": "/for-interviewer/stack/backend",
+    "title": "Backend",
+    "teaser": "APIs other services can trust: identity, roles, and queues."
+  },
+  {
+    "path": "/for-interviewer/stack/infra",
+    "title": "Infra",
+    "teaser": "One domain, TLS at the edge, object storage shared by the house."
+  }
+]

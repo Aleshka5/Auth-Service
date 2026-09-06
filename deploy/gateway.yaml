@@ -33,6 +33,12 @@ hosts:
       - match: /oauth/*
         upstream: api
         auth: public
+      # The owl chat greets anonymous readers, so it cannot require a session.
+      # Signed-in visitors still arrive with the injected X-Auth-* headers.
+      - match: /api/chat
+        methods: [POST]
+        upstream: api
+        auth: public
       - match: /api/refresh
         upstream: api
         auth: public

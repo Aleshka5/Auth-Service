@@ -13,12 +13,14 @@ import (
 	"github.com/aleshka5/auth-service/internal/config"
 	"github.com/aleshka5/auth-service/internal/gateway"
 	httpapi "github.com/aleshka5/auth-service/internal/http"
+	"github.com/aleshka5/auth-service/internal/llm"
 	applog "github.com/aleshka5/auth-service/internal/log"
 	"github.com/aleshka5/auth-service/internal/oauth"
 	"github.com/aleshka5/auth-service/internal/ratelimit"
 	"github.com/aleshka5/auth-service/internal/rejected"
 	"github.com/aleshka5/auth-service/internal/sid"
 	"github.com/aleshka5/auth-service/internal/token"
+	"github.com/aleshka5/auth-service/internal/tracing"
 	"github.com/aleshka5/auth-service/internal/usersvc"
 	"github.com/redis/go-redis/v9"
 )
@@ -75,6 +77,38 @@ func run(logger *slog.Logger) error {
 
 	limiter := ratelimit.New(rdb)
 	oauthSvc := oauth.New(cfg, rdb)
+
+	// Tracing is optional and never load-bearing: with no endpoint the tracer
+	// is a no-op, and an unreachable MLflow only produces log lines.
+	tracer, shutdownTracing, err := tracing.New(ctx, tracing.Config{
+		Endpoint:     cfg.MLflowEndpoint,
+		ExperimentID: cfg.MLflowExperimentID,
+		ServiceName:  "auth-api",
+	})
+	if err != nil {
+		logger.Warn("tracing_disabled", "err", err)
+		tracer, shutdownTracing = nil, func(context.Context) error { return nil }
+	} else if cfg.MLflowEndpoint != "" {
+		logger.Info("tracing_enabled",
+			"endpoint", tracing.TracesURL(cfg.MLflowEndpoint),
+			"experiment_id", cfg.MLflowExperimentID)
+	}
+
+	// The owl chat is not load-bearing for sign-in: a bad LLM config disables
+	// POST /api/chat and leaves the rest of the API running.
+	chat, err := llm.New(llm.Config{
+		Host:            cfg.LLMHost,
+		APIKey:          cfg.LLMAPIKey,
+		Model:           cfg.LLMModel,
+		ReasoningEffort: cfg.LLMReasoningEffort,
+		Tracer:          tracer,
+	})
+	if err != nil {
+		logger.Warn("chat_disabled", "err", err)
+	} else {
+		logger.Info("chat_enabled", "host", cfg.LLMHost, "model", cfg.LLMModel, "reasoning_effort", cfg.LLMReasoningEffort)
+	}
+
 	httpHandler := httpapi.New(
 		cfg,
 		tokens,
@@ -84,7 +118,7 @@ func run(logger *slog.Logger) error {
 		limiter,
 		func() error { return rdb.Ping(context.Background()).Err() },
 		sid.New(rdb),
-	).Handler()
+	).WithChat(chat).Handler()
 
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -109,5 +143,9 @@ func run(logger *slog.Logger) error {
 	logger.Info("shutting_down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// Flush queued spans before the process goes, but never fail shutdown on it.
+	if err := shutdownTracing(shutdownCtx); err != nil {
+		logger.Warn("tracing_shutdown", "err", err)
+	}
 	return httpSrv.Shutdown(shutdownCtx)
 }

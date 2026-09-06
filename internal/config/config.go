@@ -31,6 +31,19 @@ type Config struct {
 
 	GatewayHosts  map[string][]string
 	GatewayConfig string
+
+	// Owl chat. The API talks to the LiteLLM proxy that already fronts
+	// llm.filenkov.store; LLMHost is its OpenAI-compatible base URL.
+	LLMHost   string
+	LLMAPIKey string
+	LLMModel  string
+	// "none" keeps a reasoning model from thinking before a two-sentence
+	// answer. Set LLM_REASONING_EFFORT to "" if the proxy rejects the field.
+	LLMReasoningEffort string
+
+	// MLflow tracing. Unset endpoint disables it; the chat is unaffected.
+	MLflowEndpoint     string
+	MLflowExperimentID string
 }
 
 // LoadShared reads Redis/cookie/JWT env used by both the API and the gateway.
@@ -77,6 +90,13 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	cfg.LLMHost = strings.TrimRight(env("LLM_HOST", "http://litellm-proxy-server:4000/v1"), "/")
+	cfg.LLMAPIKey = env("LLM_API_KEY", "dummy")
+	cfg.LLMModel = env("LLM_MODEL", "gpt-4o-mini")
+	cfg.LLMReasoningEffort = strings.TrimSpace(envOr("LLM_REASONING_EFFORT", "none"))
+	cfg.MLflowEndpoint = strings.TrimRight(strings.TrimSpace(os.Getenv("MLFLOW_TRACING_ENDPOINT")), "/")
+	cfg.MLflowExperimentID = strings.TrimSpace(os.Getenv("MLFLOW_EXPERIMENT_ID"))
 
 	cfg.GoogleClientID = os.Getenv("GOOGLE_CLIENT_ID")
 	cfg.GoogleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET")
@@ -175,6 +195,15 @@ func hostFromOrigin(origin string) string {
 		return ""
 	}
 	return strings.ToLower(u.Hostname())
+}
+
+// envOr differs from env: a variable that is set but empty stays empty, so a
+// field can be switched off rather than falling back to its default.
+func envOr(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+	return fallback
 }
 
 func env(key, fallback string) string {

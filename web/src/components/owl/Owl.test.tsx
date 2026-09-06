@@ -1,8 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '../../auth'
 import { jsonResponse, stranger } from '../../test/fixtures'
+import { GREETING } from './greeting'
 import { Owl } from './Owl'
 
 let scrollTo: ReturnType<typeof vi.fn>
@@ -11,6 +13,7 @@ beforeEach(() => {
   scrollTo = vi.fn()
   vi.stubGlobal('scrollTo', scrollTo)
   vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(stranger)))
+  sessionStorage.clear()
 })
 
 afterEach(() => {
@@ -20,9 +23,9 @@ afterEach(() => {
   document.getElementById('node-article')?.remove()
 })
 
-function renderOwl() {
+function renderOwl(path = '/') {
   return render(
-    <MemoryRouter initialEntries={['/']}>
+    <MemoryRouter initialEntries={[path]}>
       <AuthProvider>
         <Owl />
       </AuthProvider>
@@ -91,5 +94,84 @@ describe('Owl', () => {
     expect(hero?.getAttribute('data-mascot-motion')).toBe('angry-to-calm')
     expect(hero?.querySelector('svg')).not.toBeNull()
     expect(button.querySelector('.owl-art svg')).not.toBeNull()
+  })
+
+  it('greets the reader beside the hero owl on every arrival', async () => {
+    const { unmount } = renderOwl()
+
+    // The bubble is announced whole, and types itself out for the eye.
+    const bubble = await screen.findByRole('status')
+    expect(bubble).toHaveTextContent(GREETING)
+    // It arrives a letter at a time, so give the typing more than the default second.
+    await waitFor(
+      () => {
+        expect(bubble.querySelector('[aria-hidden="true"]')?.textContent).toBe(GREETING)
+      },
+      { timeout: 5000 },
+    )
+
+    // No once-per-session gate: entering the site again greets again.
+    unmount()
+    renderOwl()
+    expect(await screen.findByRole('status')).toHaveTextContent(GREETING)
+  })
+
+  it('never opens the chat on its own — the greeting only invites the click', async () => {
+    renderOwl()
+
+    const hero = await screen.findByRole('button', { name: 'Chat with the AI owl' })
+    expect(screen.getByRole('status')).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Ask me something')).toBeNull()
+    expect(hero.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('leaves a node page alone: no greeting, no panel', async () => {
+    renderOwl('/experience/sber')
+    await screen.findByRole('button', { name: 'Chat with the AI owl' })
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByPlaceholderText('Ask me something')).toBeNull()
+  })
+
+  it.each(['/', '/experience/sber'])('opens on click at %s, and focuses the field', async (path) => {
+    renderOwl(path)
+    const hero = await screen.findByRole('button', { name: 'Chat with the AI owl' })
+
+    await userEvent.click(hero)
+
+    const input = await screen.findByPlaceholderText('Ask me something')
+    expect(hero.getAttribute('aria-expanded')).toBe('true')
+    // Opened deliberately, so the caret belongs in the field.
+    await waitFor(() => expect(document.activeElement).toBe(input))
+  })
+
+  it('drops the greeting once the reader takes it up', async () => {
+    renderOwl()
+    await screen.findByRole('status')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Chat with the AI owl' }))
+
+    expect(await screen.findByPlaceholderText('Ask me something')).toBeInTheDocument()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('dismissing the greeting does not open anything', async () => {
+    renderOwl()
+    await screen.findByRole('status')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByPlaceholderText('Ask me something')).toBeNull()
+  })
+
+  it('closes again and stays closed', async () => {
+    renderOwl()
+    await userEvent.click(screen.getByRole('button', { name: 'Chat with the AI owl' }))
+    await screen.findByPlaceholderText('Ask me something')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close chat' }))
+
+    expect(screen.queryByPlaceholderText('Ask me something')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Chat with the AI owl' }).getAttribute('aria-expanded')).toBe('false')
   })
 })

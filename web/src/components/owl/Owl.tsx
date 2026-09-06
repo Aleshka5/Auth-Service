@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react'
+import { lazy, Suspense, useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import angryToCalm from '../../assets/animations/angry-to-calm.svg?raw'
 import calmToAngry from '../../assets/animations/calm-to-angry.svg?raw'
@@ -7,6 +7,10 @@ import restingCalm from '../../assets/My_icon_calm.svg?raw'
 import { useAuth } from '../../auth'
 import { prefersReducedMotion } from '../../hooks/useReducedMotion'
 import { isAdmin, type User } from '../../types'
+import { OwlBubble } from './OwlBubble'
+
+/** The panel and its streaming client stay out of the initial bundle (§10). */
+const OwlChat = lazy(() => import('./OwlChat'))
 
 /**
  * The owl (§8). One component, two states, driven by
@@ -14,6 +18,10 @@ import { isAdmin, type User } from '../../types'
  *
  *   hero   — visually parked in the 128px slot above the article, not a control
  *   docked — a real "Back to top" button in the bottom-right corner
+ *
+ * The hero owl is also the way into the chat: clicking it opens the panel.
+ * Docked, it goes back to being the "Back to top" button — a corner button that
+ * changed meaning on scroll would be worse than two separate affordances.
  *
  * This is the two-element cross-fade from the end of §8.3, not FLIP. FLIP needs
  * the hero transform re-measured on every scroll frame, which fights the 240ms
@@ -59,6 +67,12 @@ type OwlProps = {
 export function Owl({ departing = false, departNonce = 0, onDeparted }: OwlProps) {
   const { pathname } = useLocation()
   const { user, loading } = useAuth()
+  // Arriving on the hub is the greeting: the owl introduces itself, every time.
+  // Read once at mount, so walking into the tree and back does not replay it —
+  // a reload does. The chat itself never opens on its own; it is the reader's
+  // click on the owl, and nothing else.
+  const [chatOpen, setChatOpen] = useState(false)
+  const [greeting, setGreeting] = useState(() => pathname === '/')
   const clip = departing ? 'guest' : pickOwlClip(pathname, user)
   const spec = clips[clip]
   const playId = `${clip}-${pathname}-${departNonce}`
@@ -95,9 +109,18 @@ export function Owl({ departing = false, departNonce = 0, onDeparted }: OwlProps
     }
   }, [loading, playId, spec.motion, spec.durationMs])
 
+  const openChat = useCallback(() => {
+    // The greeting asked for the click; once it comes, it has served its turn.
+    setGreeting(false)
+    setChatOpen(true)
+  }, [])
+
+  const closeChat = useCallback(() => setChatOpen(false), [])
+
   const onClick = () => {
-    // While the owl is the hero it is decoration, not a control (§8.1). CSS
-    // makes it unclickable; this guard makes it inert for keyboard and tests.
+    // The corner owl is only ever "back to top"; the hero owl opens the chat.
+    // CSS makes the docked button unclickable while it is the hero; this guard
+    // makes it inert for keyboard and tests.
     if (document.documentElement.dataset.owl !== 'docked') return
     const reduced = prefersReducedMotion()
     window.scrollTo({ top: 0, behavior: reduced ? 'auto' : 'smooth' })
@@ -107,15 +130,30 @@ export function Owl({ departing = false, departNonce = 0, onDeparted }: OwlProps
 
   return (
     <>
-      <div className="owl-slot" aria-hidden="true">
-        <div
-          ref={heroRef}
-          className="owl-hero"
-          data-mascot={loading ? undefined : clip}
-          data-mascot-phase="motion"
-          data-mascot-motion={spec.motionName}
-        />
+      <div className="owl-slot">
+        <button
+          className="owl-hero-button"
+          type="button"
+          aria-label="Chat with the AI owl"
+          aria-expanded={chatOpen}
+          onClick={openChat}
+        >
+          <div
+            ref={heroRef}
+            className="owl-hero"
+            aria-hidden="true"
+            data-mascot={loading ? undefined : clip}
+            data-mascot-phase="motion"
+            data-mascot-motion={spec.motionName}
+          />
+        </button>
+        {greeting ? <OwlBubble onDismiss={() => setGreeting(false)} /> : null}
       </div>
+      {chatOpen ? (
+        <Suspense fallback={<div className="owl-chat owl-chat-loading">Waking the owl…</div>}>
+          <OwlChat onClose={closeChat} user={user} />
+        </Suspense>
+      ) : null}
       <button className="owl" type="button" aria-label="Back to top" onClick={onClick}>
         <div ref={hostRef} className="owl-art" aria-hidden="true" />
         <svg className="owl-ring" viewBox="0 0 56 56" aria-hidden="true">

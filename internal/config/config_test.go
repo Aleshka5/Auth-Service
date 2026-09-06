@@ -137,3 +137,31 @@ func TestLoadRequiresSecrets(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestLoadReasoningEffortDefaultsToNone(t *testing.T) {
+	t.Setenv("JWT_SECRET", testJWTSecret)
+	t.Setenv("GOOGLE_CLIENT_ID", "id")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "secret")
+	t.Setenv("GOOGLE_REDIRECT_URL", "https://filenkov.store/oauth/google/callback")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLMReasoningEffort != "none" {
+		t.Fatalf("reasoning effort %q", cfg.LLMReasoningEffort)
+	}
+	if cfg.LLMHost != "http://litellm-proxy-server:4000/v1" || cfg.LLMAPIKey != "dummy" {
+		t.Fatalf("llm defaults %q %q", cfg.LLMHost, cfg.LLMAPIKey)
+	}
+
+	// Set-but-empty switches the field off rather than restoring the default.
+	t.Setenv("LLM_REASONING_EFFORT", "")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LLMReasoningEffort != "" {
+		t.Fatalf("empty must stay empty, got %q", cfg.LLMReasoningEffort)
+	}
+}
