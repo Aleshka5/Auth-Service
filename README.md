@@ -14,12 +14,12 @@ cmd/gateway/      Public HTTP edge after Caddy (:8083)
 internal/         config, http, gateway, oauth, token, rejected, usersvc, ratelimit, log
 web/              Vite SPA — resume tree + /auth + /admin (static nginx image, internal upstream)
 deploy/           docker-compose.yml, Dockerfiles, gateway.yaml
-docs/             auth-gateway.md, user-story-*.md (directory contract, storage host, admin directory list)
+docs/             auth-gateway.md, user-story-*.md (directory contract, storage host, admin directory list, messenger host CR, image host CR — shipped)
 ```
 
 ## Quick start (Docker Compose)
 
-Start the **User-Service** stack first so external network `user_network` and hostname `user_service` exist. Start the **LiteLLM** stack so `llm_network` and hostname `litellm-proxy-server` exist. Auth compose **attaches** those networks; it does not create User-Service or LiteLLM.
+Start the **User-Service** stack first so external network `user_network` and hostname `user_service` exist. Start the **LiteLLM** stack so `llm_network` and hostname `litellm-proxy-server` exist (owl chat), and have the one-off llama.cpp container `qwen38` already on that network. Start the **image** stack so `qwen_image_gen_network` and hostname `qwen-image` exist. Auth compose **attaches** those networks; it does not create User-Service, LiteLLM, `qwen38`, or the image service.
 
 1. Copy env and fill Google OAuth + `JWT_SECRET` (≥32 random bytes):
 
@@ -50,7 +50,7 @@ Start the **User-Service** stack first so external network `user_network` and ho
    # or: podman compose --env-file .env -f deploy/docker-compose.yml up --build
    ```
 
-   Networks: `auth_network` (created here) + `user_network` (`external: true`) + `llm_network` (`external: true`). Services: `redis` (`redis:7-alpine`), `web`, `api`, `gateway`.
+   Networks: `auth_network` (created here) + `user_network` (`external: true`) + `llm_network` (`external: true`) + `qwen_image_gen_network` (`external: true`, gateway only). Services: `redis` (`redis:7-alpine`), `web`, `api`, `gateway`.
 
    Compose publishes **only** the gateway:
 
@@ -63,9 +63,9 @@ Start the **User-Service** stack first so external network `user_network` and ho
 
    Gateway process health: `GET http://127.0.0.1:8083/healthz` (not the proxied `/health`). API healthcheck: `GET http://127.0.0.1:8000/health` inside the container (Redis ping).
 
-If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail. If `litellm-proxy-server` is down, `llm.filenkov.store` returns a gateway proxy error after a valid session.
+If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail. If `qwen38` is down, `llm.filenkov.store` returns a gateway proxy error for a hub `ADMIN`. If `litellm-proxy-server` is down, the hub owl chat fails and sign-in still works. If `messanger` is down, `messanger.filenkov.store` returns a gateway proxy error on that host only. If `qwen-image` is down, `image.filenkov.store` returns a gateway proxy error on that host only; the image **network** must still exist for the gateway container to start (`docker network create qwen_image_gen_network` if the image stack is not up yet).
 
-Operator order: User-Service stack, LiteLLM stack (so `llm_network` and `litellm-proxy-server` exist), Auth stack, Common (WebStorage data volumes), then WebStorage (`app` joins `auth_network` as external so `http://app:8000` resolves).
+Operator order: User-Service stack, LiteLLM stack (so `llm_network` and `litellm-proxy-server` exist for owl chat) with `qwen38` already on that network, image stack (so `qwen_image_gen_network` and `qwen-image` exist), Auth stack, Common (WebStorage data volumes), then WebStorage (`app` joins `auth_network` as external so `http://app:8000` resolves) and HomeMessanger (`messanger` joins the same network so `http://messanger:8000` resolves).
 
 ## Host Caddy (TLS only)
 
@@ -84,17 +84,28 @@ storage.filenkov.store {
 	reverse_proxy 127.0.0.1:8083
 }
 
+messanger.filenkov.store {
+	encode gzip
+	reverse_proxy 127.0.0.1:8083
+}
+
 llm.filenkov.store {
 	encode gzip
 	reverse_proxy 127.0.0.1:8083
 }
+
+image.filenkov.store {
+	reverse_proxy 127.0.0.1:8083
+}
 ```
+
+The production site blocks (TLS 1.3, security headers, HTTP→HTTPS redirects) are in `deploy/Caddyfile.filenkov`; the image site has no `encode gzip`.
 
 If the hub site block already exists, delete `handle /oauth/*`, `handle /api/*`, `handle /health`, `handle /hermes/*`, and the SPA catch-all, then use the single `reverse_proxy` above.
 
 Reload with `sudo systemctl reload caddy` (or `caddy reload --config /etc/caddy/Caddyfile`).
 
-API (`:8000`) and web are **not** published on the host. There is no Caddy rollback to `:8081` / `:8082`. The storage and LLM Caddy sites are operator config (not in this repo). WebStorage and LiteLLM stay unpublished behind the gateway.
+API (`:8000`) and web are **not** published on the host. There is no Caddy rollback to `:8081` / `:8082`. The storage, messenger, and LLM Caddy sites are operator config (not in this repo). WebStorage, HomeMessanger, Qwen Image, and LiteLLM stay unpublished behind the gateway. `llm.filenkov.store` reaches `qwen38` on `llm_network`; the gateway does not use a host-published port for that container.
 
 ## Local Go (without Compose for the API)
 
@@ -177,7 +188,7 @@ IP rate limits: gateway (default 180/min, YAML) plus API defense in depth (OAuth
 | Refresh | `auth_refresh` | `JWT_REFRESH_TTL` | `168h` |
 | Companion sid | `auth_session` | `JWT_REFRESH_TTL` | `168h` |
 
-Alg **HS256**. Access claims: `sub` (User-Service UUID), `jti`, `typ=access`, `global_role`, `email`, `username`, `iss`=`PUBLIC_ORIGIN`, `aud`=YAML hosts (hub + `storage.filenkov.store` + `llm.filenkov.store`, plus loopback when `AUTH_DEV_HTTP`). Refresh claims: `sub`, `jti`, `typ=refresh`, `iss`/`aud`/`exp` only (no roles). Rotation re-reads User-Service.
+Alg **HS256**. Access claims: `sub` (User-Service UUID), `jti`, `typ=access`, `global_role`, `email`, `username`, `iss`=`PUBLIC_ORIGIN`, `aud`=YAML hosts (hub + `storage.filenkov.store` + `messanger.filenkov.store` + `image.filenkov.store` + `llm.filenkov.store`, plus loopback when `AUTH_DEV_HTTP`). Refresh claims: `sub`, `jti`, `typ=refresh`, `iss`/`aud`/`exp` only (no roles). Rotation re-reads User-Service.
 
 `auth_session` is a random 32-byte hex sid, **not** the access JWT and **not** the user UUID. Redis `session:{sid}` → User-Service UUID. Stable for the login lifetime (not rotated on access refresh). Edge auth ignores it.
 
@@ -206,7 +217,11 @@ The gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` so cli
 
 **Storage host** (`storage.filenkov.store`, `role_field: storage`) also sets `X-User-Id` (same UUID) and `X-Storage-Role` from User-Service `GET /users/{id}/roles/storage`. Cookie is forwarded. User-Service errors → 503 (or 401 if the user is gone).
 
-**LiteLLM host** (`llm.filenkov.store`) is a non–User-Service upstream: `X-Auth-*` only, catch-all `auth: session`, 10m proxy timeout. Cookie is forwarded. The access JWT is not sent to LiteLLM.
+**Messenger host** (`messanger.filenkov.store`, `role_field: global_role`) is a non–User-Service upstream `http://messanger:8000` on `auth_network`: `X-Auth-*` only, `/health` public, catch-all `auth: session`, 5m proxy timeout. No User-Service call, no `X-User-Id` / `X-Storage-Role`. Cookie is forwarded; the messenger reads none. The access JWT is not sent.
+
+**Image host** (`image.filenkov.store`, `role_field: image`) is a non–User-Service upstream `http://qwen-image:8000` on external `qwen_image_gen_network`: `X-Auth-*` only (hub `global_role` as `X-Auth-Role`), `/healthz` public (the app's, not the gateway's), catch-all `auth: session`, 30m proxy timeout. On session routes the gateway calls `GET /users/{id}/roles/image` and proxies only `FAMILY` / `ADMIN`; `STRANGER` (including no row) and `BLOCKED` → 403, user 404 → 401, User-Service error → 503. A hub `ADMIN` with no `image` row is refused. No `X-User-Id` / per-service role header; the access JWT is not sent.
+
+**LLM host** (`llm.filenkov.store`) is a non–User-Service upstream `http://qwen38:4001` (llama.cpp server, container `qwen38`, not in this compose, on external `llm_network`): `X-Auth-*` only (hub `global_role`), catch-all `auth: admin`, 10m proxy timeout. No User-Service call and no access JWT. The hub header links it as **Chat** for hub admins only. Owl chat still uses LiteLLM at `litellm-proxy-server:4000` via `LLM_HOST`.
 
 **User-Service** upstream: strip `Cookie` and `Authorization`; set `X-User-Id` from JWT `sub`. Do not send JWTs.
 
@@ -221,7 +236,7 @@ The hub is a **resume tree**, not one scrolling page. `App.tsx` keeps `/auth` an
 - `meta.ts` is eager — the spine, branch cards, title and meta line paint immediately, with no spinner. `node.tsx` is lazy: one Rollup chunk per node, named after its URL path.
 - `/about-project/architecture/<slug>` is a dynamic child: 10 solution pages served by one node body via `meta.dynamicChild`, no folder each.
 - Node visibility is declarative — `visibleWhen: 'signed-in' | 'admin'` in `meta.ts`. `achievements/projects/hermes` is the only signed-in node.
-- Header (`components/Layout.tsx`) has three scroll states written onto `<html data-header>` by `hooks/useScrollChrome.ts` (no React re-render on scroll), plus service links to LLM, Storage, Hermes (everyone, locked for guests) and Admin (`ADMIN` only). The owl (`components/owl/Owl.tsx`) is a hero in the flow that cross-fades into a "Back to top" button on scroll.
+- Header (`components/Layout.tsx`) has three scroll states written onto `<html data-header>` by `hooks/useScrollChrome.ts` (no React re-render on scroll), plus service links to Messanger, Storage, Hermes (everyone, locked for guests), Image (only when the `image` service role is `FAMILY` or `ADMIN`, no lock), Chat (`https://llm.filenkov.store`, hub `ADMIN` only, no lock) and Admin (`ADMIN` only). The owl (`components/owl/Owl.tsx`) is a hero in the flow that cross-fades into a "Back to top" button on scroll.
 - Styles live in `web/src/styles/{fonts,tokens,base,shell,article,tree,forms}.css`; fonts are self-hosted from `web/public/fonts/` (no Google Fonts request).
 - `web/vite.config.ts` emits `sitemap.xml` and `robots.txt` from the node folders and fails the build if initial JS exceeds 95 KB gzipped (88.5 KB today).
 - Deep links work because `web/nginx.conf` does `try_files $uri $uri/ /index.html`. **No `deploy/gateway.yaml` change was needed** — the trailing `- match: /*  upstream: web  auth: public` already serves every node path.
@@ -234,7 +249,7 @@ Hub `ADMIN` only (`/admin` is `auth: admin`). The admin page loads the directory
 
 - `GET /users` — list (`{ "users": [ … ] }` with persisted `services` per item). Gateway policy **`admin`**. Missing services render as `STRANGER` in the SPA.
 - `PUT /users/{id}/role` body `{ "role": "FAMILY" }` — instant apply on select.
-- `PUT /users/{id}/roles/{service}` body `{ "role": "FAMILY" }` — `storage`, `resume`, and any other persisted service keys on the loaded rows.
+- `PUT /users/{id}/roles/{service}` body `{ "role": "FAMILY" }` — fixed columns `storage`, `resume`, `image` (shown before any row exists), plus any other persisted service keys on the loaded rows.
 
 The SPA does not send `X-User-Id` (the gateway overwrites it). User-Service error envelope `{ "error": { "code", "message" } }` is proxied unchanged (`409 LAST_ADMIN` included). Self-edit is allowed. Spec + what shipped: [docs/user-story-admin-directory.md](docs/user-story-admin-directory.md).
 
@@ -244,11 +259,11 @@ Tests: `go test ./...` (`TestHubUsersListAdminOnly`, `TestHubUsersListProxiesWit
 
 Canonical enum in User-Service: `ADMIN` \| `FAMILY` \| `STRANGER` \| `BLOCKED`.
 
-Hub edge auth uses access-JWT `global_role`. Per-service roles are User-Service `{service}` keys (`storage`, `resume`), not Auth DB columns.
+Hub edge auth uses access-JWT `global_role`. Per-service roles are User-Service `{service}` keys (`storage`, `resume`, `image`), not Auth DB columns.
 
 ## Gateway routing
 
-YAML: `deploy/gateway.yaml`. First matching route wins. Hosts: `filenkov.store` (hub), `storage.filenkov.store` (one upstream `http://app:8000`, `/health` public, 30m proxy timeout), and `llm.filenkov.store` (one upstream `http://litellm-proxy-server:4000` on `llm_network`, `auth: session`, 10m proxy timeout). Hub `role_field` is `global_role`. `GET /users` (exact) is `auth: admin` → User-Service. `POST /users` and `/users/by-google-sub/*` are `auth: reject` (404 at the gateway). `/users/*` proxies to User-Service (`auth: session`: valid access JWT required). Full schema and Caddy notes: [docs/auth-gateway.md](docs/auth-gateway.md).
+YAML: `deploy/gateway.yaml`. First matching route wins. Hosts: `filenkov.store` (hub), `storage.filenkov.store` (one upstream `http://app:8000`, `/health` public, 30m proxy timeout), `messanger.filenkov.store` (one upstream `http://messanger:8000` on `auth_network`, `/health` public, catch-all `auth: session`, 5m proxy timeout), `image.filenkov.store` (one upstream `http://qwen-image:8000` on `qwen_image_gen_network`, `role_field: image`, `/healthz` public, catch-all `auth: session`, 30m proxy timeout), and `llm.filenkov.store` (one upstream `http://qwen38:4001` on `llm_network`, llama.cpp container `qwen38` not in this compose, catch-all `auth: admin`, 10m proxy timeout). Hub `role_field` is `global_role`. `GET /users` (exact) is `auth: admin` → User-Service. `POST /users`, `/users/by-google-sub/*`, and `/users/by-email/*` are `auth: reject` (404 at the gateway; both lookups are service-to-service on `user_network` only). `/users/*` proxies to User-Service (`auth: session`: valid access JWT required). Full schema and Caddy notes: [docs/auth-gateway.md](docs/auth-gateway.md).
 
 ## What was removed
 

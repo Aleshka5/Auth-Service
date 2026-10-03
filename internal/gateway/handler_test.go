@@ -119,6 +119,8 @@ hosts:
         auth: session
       - match: /users/by-google-sub/*
         auth: reject
+      - match: /users/by-email/*
+        auth: reject
       - match: /users
         methods: [POST]
         auth: reject
@@ -867,7 +869,7 @@ func TestUserServiceProxySetsXUserIdStripsJWT(t *testing.T) {
 	}
 }
 
-func TestUserServiceCreateAndGoogleSubRejected(t *testing.T) {
+func TestUserServiceCreateAndLookupRejected(t *testing.T) {
 	hr := newGW(t)
 	_, raw := hr.login("ada@example.com", "ada", "ADMIN")
 
@@ -878,6 +880,10 @@ func TestUserServiceCreateAndGoogleSubRejected(t *testing.T) {
 	rec = hr.do(withAccess(req(http.MethodGet, "/users/by-google-sub/11001"), raw))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("by-google-sub %d", rec.Code)
+	}
+	rec = hr.do(withAccess(req(http.MethodGet, "/users/by-email/ada@example.com"), raw))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("by-email %d", rec.Code)
 	}
 	if hr.users.path != "" {
 		t.Fatalf("rejected paths must not proxy, path=%q", hr.users.path)
@@ -1000,29 +1006,38 @@ hosts:
 `)
 }
 
+// storageRoleMock serves GET /users/{id}/roles/{service} for one service
+// (storage unless built with newServiceRoleMock).
 type storageRoleMock struct {
-	mu     sync.Mutex
-	role   map[string]string
-	fail   map[string]int
-	calls  int
-	lastID string
-	cookie string
-	authz  string
+	mu       sync.Mutex
+	service  string
+	role     map[string]string
+	fail     map[string]int
+	calls    int
+	lastID   string
+	lastPath string
+	cookie   string
+	authz    string
 }
 
 func newStorageRoleMock() *storageRoleMock {
-	return &storageRoleMock{role: map[string]string{}, fail: map[string]int{}}
+	return newServiceRoleMock("storage")
+}
+
+func newServiceRoleMock(service string) *storageRoleMock {
+	return &storageRoleMock{service: service, role: map[string]string{}, fail: map[string]int{}}
 }
 
 func (m *storageRoleMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	m.calls++
+	m.lastPath = r.URL.Path
 	m.cookie = r.Header.Get("Cookie")
 	m.authz = r.Header.Get("Authorization")
 	m.mu.Unlock()
 
 	const prefix = "/users/"
-	const suffix = "/roles/storage"
+	suffix := "/roles/" + m.service
 	if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, prefix) || !strings.HasSuffix(r.URL.Path, suffix) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -1049,7 +1064,7 @@ func (m *storageRoleMock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		role = "STRANGER"
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"user_id": id, "service": "storage", "role": role})
+	_ = json.NewEncoder(w).Encode(map[string]string{"user_id": id, "service": m.service, "role": role})
 }
 
 type storageHarness struct {
@@ -1312,6 +1327,196 @@ func TestHubUsersListProxiesWithXUserId(t *testing.T) {
 	}
 }
 
+func yamlWithMessanger(product, userSvc, messanger string) []byte {
+	return []byte(`
+listen: ":0"
+public_origin: "https://filenkov.store"
+rate_limit:
+  requests_per_minute: 10000
+timeouts:
+  proxy: 60s
+upstreams:
+  api: "` + product + `"
+  web: "` + product + `"
+  hermes: "` + product + `"
+  user_service: "` + userSvc + `"
+  messanger: "` + messanger + `"
+hosts:
+  filenkov.store:
+    role_field: global_role
+    routes:
+      - match: /users/by-email/*
+        auth: reject
+      - match: /users/*
+        upstream: user_service
+        auth: session
+        preserve_host: false
+      - match: /*
+        upstream: web
+        auth: public
+  messanger.filenkov.store:
+    role_field: global_role
+    timeouts:
+      proxy: 5m
+    routes:
+      - match: /health
+        upstream: messanger
+        auth: public
+      - match: /*
+        upstream: messanger
+        auth: session
+`)
+}
+
+type messangerHarness struct {
+	*gwHarness
+	messanger *probe
+	roles     *storageRoleMock
+}
+
+func newMessangerGW(t *testing.T) *messangerHarness {
+	t.Helper()
+	product, productProbe := newUpstream(t)
+	messanger, messangerProbe := newUpstream(t)
+	roles := newStorageRoleMock()
+	roleSrv := httptest.NewServer(roles)
+	t.Cleanup(roleSrv.Close)
+	file, err := Parse(yamlWithMessanger(product.URL, roleSrv.URL, messanger.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		CookieSecure: false,
+		PublicOrigin: "https://filenkov.store",
+		DevHTTP:      true,
+	}
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	secret := []byte("test-secret-key-32-bytes-long!!!")
+	tok := testToken(t, secret, 15*time.Minute)
+	users, err := usersvc.New(roleSrv.URL, roleSrv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rej := rejected.New(rdb)
+	sessions := sid.New(rdb)
+	s, err := New(cfg, file, tok, rej, ratelimit.New(rdb), users, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &messangerHarness{
+		gwHarness: &gwHarness{t: t, h: s.Handler(), tok: tok, rej: rej, sessions: sessions, up: productProbe, users: productProbe, secret: secret},
+		messanger: messangerProbe,
+		roles:     roles,
+	}
+}
+
+func messangerReq(method, path string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	r.Host = "messanger.filenkov.store"
+	return r
+}
+
+func TestMessangerHealthPublic(t *testing.T) {
+	hr := newMessangerGW(t)
+	rec := hr.do(messangerReq(http.MethodGet, "/health"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.messanger.path != "/health" {
+		t.Fatalf("path %q", hr.messanger.path)
+	}
+	if hr.roles.calls != 0 {
+		t.Fatalf("anonymous /health must not call User-Service, calls=%d", hr.roles.calls)
+	}
+}
+
+func TestMessangerAnonymousRedirectVs401(t *testing.T) {
+	hr := newMessangerGW(t)
+	rec := hr.do(messangerReq(http.MethodGet, "/"))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("html status %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.Contains(loc, "/auth?return_to=") {
+		t.Fatalf("location %q", loc)
+	}
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Query().Get("return_to") != "https://messanger.filenkov.store/" {
+		t.Fatalf("return_to %q", u.Query().Get("return_to"))
+	}
+	if hr.messanger.path != "" {
+		t.Fatal("must not proxy")
+	}
+
+	xhr := messangerReq(http.MethodGet, "/")
+	xhr.Header.Set("X-Requested-With", "XMLHttpRequest")
+	rec = hr.do(xhr)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("xhr %d", rec.Code)
+	}
+
+	api := messangerReq(http.MethodGet, "/api/dialogs")
+	rec = hr.do(api)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/api %d", rec.Code)
+	}
+	if hr.roles.calls != 0 {
+		t.Fatalf("anonymous requests must not call User-Service, calls=%d", hr.roles.calls)
+	}
+}
+
+func TestMessangerInjectsHeadersNoRoleLookup(t *testing.T) {
+	hr := newMessangerGW(t)
+	sub, raw := hr.login("ada@example.com", "ada", "FAMILY")
+	r := withAccess(messangerReq(http.MethodGet, "/api/dialogs"), raw)
+	r.Header.Set("X-Auth-User-Id", "spoof-user")
+	r.Header.Set("X-Auth-Email", "evil@example.com")
+	r.Header.Set("X-Auth-Name", "evil")
+	r.Header.Set("X-Auth-Role", "ADMIN")
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.messanger.path != "/api/dialogs" {
+		t.Fatalf("path %q", hr.messanger.path)
+	}
+	if hr.messanger.authID != sub {
+		t.Fatalf("X-Auth-User-Id %q want %q", hr.messanger.authID, sub)
+	}
+	if hr.messanger.authEmail != "ada@example.com" || hr.messanger.authName != "ada" {
+		t.Fatalf("x-auth %+v", hr.messanger)
+	}
+	if hr.messanger.authRole != "FAMILY" {
+		t.Fatalf("X-Auth-Role must be the hub global_role, got %q", hr.messanger.authRole)
+	}
+	if hr.messanger.storageRole != "" || hr.messanger.userID != "" {
+		t.Fatalf("global_role host must not inject X-User-Id/X-Storage-Role: %+v", hr.messanger)
+	}
+	if hr.roles.calls != 0 {
+		t.Fatalf("messanger host must not call User-Service, calls=%d", hr.roles.calls)
+	}
+}
+
+func TestMessangerBlockedForbidden(t *testing.T) {
+	hr := newMessangerGW(t)
+	_, raw := hr.login("b@b.c", "blocked", "BLOCKED")
+	rec := hr.do(withAccess(messangerReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if hr.messanger.path != "" {
+		t.Fatal("hub BLOCKED must not reach the messanger")
+	}
+	if hr.roles.calls != 0 {
+		t.Fatalf("BLOCKED must be stopped before any User-Service call, calls=%d", hr.roles.calls)
+	}
+}
+
 func TestStorageProxyTimeoutOverride(t *testing.T) {
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(400 * time.Millisecond)
@@ -1362,5 +1567,343 @@ hosts:
 	rec := hr.do(withAccess(storageReq(http.MethodGet, "/upload"), raw))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("want 502 from per-host proxy timeout, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func yamlWithImage(product, userSvc, image string) []byte {
+	return []byte(`
+listen: ":0"
+public_origin: "https://filenkov.store"
+rate_limit:
+  requests_per_minute: 10000
+timeouts:
+  proxy: 60s
+upstreams:
+  api: "` + product + `"
+  web: "` + product + `"
+  user_service: "` + userSvc + `"
+  qwen_image: "` + image + `"
+hosts:
+  filenkov.store:
+    role_field: global_role
+    routes:
+      - match: /users/*
+        upstream: user_service
+        auth: session
+        preserve_host: false
+      - match: /*
+        upstream: web
+        auth: public
+  image.filenkov.store:
+    role_field: image
+    timeouts:
+      proxy: 30m
+    routes:
+      - match: /healthz
+        upstream: qwen_image
+        auth: public
+      - match: /*
+        upstream: qwen_image
+        auth: session
+`)
+}
+
+type imageHarness struct {
+	*gwHarness
+	image *probe
+	roles *storageRoleMock
+}
+
+func newImageGW(t *testing.T) *imageHarness {
+	t.Helper()
+	return newImageGWUsers(t, true)
+}
+
+// newImageGWUsers builds the image harness; withUsers=false leaves the
+// User-Service client nil (not configured).
+func newImageGWUsers(t *testing.T, withUsers bool) *imageHarness {
+	t.Helper()
+	product, productProbe := newUpstream(t)
+	image, imageProbe := newUpstream(t)
+	roles := newServiceRoleMock("image")
+	roleSrv := httptest.NewServer(roles)
+	t.Cleanup(roleSrv.Close)
+	file, err := Parse(yamlWithImage(product.URL, roleSrv.URL, image.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		CookieSecure: false,
+		PublicOrigin: "https://filenkov.store",
+		DevHTTP:      true,
+	}
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	secret := []byte("test-secret-key-32-bytes-long!!!")
+	tok := testToken(t, secret, 15*time.Minute)
+	var users *usersvc.Client
+	if withUsers {
+		users, err = usersvc.New(roleSrv.URL, roleSrv.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	rej := rejected.New(rdb)
+	sessions := sid.New(rdb)
+	s, err := New(cfg, file, tok, rej, ratelimit.New(rdb), users, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &imageHarness{
+		gwHarness: &gwHarness{t: t, h: s.Handler(), tok: tok, rej: rej, sessions: sessions, up: productProbe, users: productProbe, secret: secret},
+		image:     imageProbe,
+		roles:     roles,
+	}
+}
+
+func imageReq(method, path string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	r.Host = "image.filenkov.store"
+	return r
+}
+
+func assertErrorBody(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] != want {
+		t.Fatalf("body %s want error %q", rec.Body.String(), want)
+	}
+}
+
+func TestHealthzLocalUnlessHostRoutesIt(t *testing.T) {
+	hr := newImageGW(t)
+
+	rec := hr.do(imageReq(http.MethodGet, "/healthz"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("image healthz status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.image.path != "/healthz" {
+		t.Fatalf("image /healthz must be proxied to the app, upstream path %q", hr.image.path)
+	}
+
+	for _, host := range []string{"filenkov.store", "0.0.0.0:8083"} {
+		hr.up.path = ""
+		r := req(http.MethodGet, "/healthz")
+		r.Host = host
+		rec = hr.do(r)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s healthz status %d", host, rec.Code)
+		}
+		if hr.up.path != "" {
+			t.Fatalf("%s: catch-all must not claim /healthz, upstream path %q", host, hr.up.path)
+		}
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["status"] != "ok" {
+			t.Fatalf("%s: local healthz body %s", host, rec.Body.String())
+		}
+	}
+}
+
+func TestImageHealthzPublicNoRoleLookup(t *testing.T) {
+	hr := newImageGW(t)
+	rec := hr.do(imageReq(http.MethodGet, "/healthz"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("anonymous status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.image.path != "/healthz" {
+		t.Fatalf("path %q", hr.image.path)
+	}
+
+	hr.image.path = ""
+	_, raw := hr.login("s@b.c", "stranger", "STRANGER")
+	rec = hr.do(withAccess(imageReq(http.MethodGet, "/healthz"), raw))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("signed-in STRANGER healthz status %d %s", rec.Code, rec.Body.String())
+	}
+	if hr.image.path != "/healthz" {
+		t.Fatalf("signed-in STRANGER healthz must be proxied, path %q", hr.image.path)
+	}
+	if hr.roles.calls != 0 {
+		t.Fatalf("public /healthz must not call User-Service, calls=%d", hr.roles.calls)
+	}
+}
+
+func TestImageHealthzWithoutUserService(t *testing.T) {
+	hr := newImageGWUsers(t, false)
+	_, raw := hr.login("f@b.c", "fam", "FAMILY")
+	rec := hr.do(withAccess(imageReq(http.MethodGet, "/healthz"), raw))
+	if rec.Code != http.StatusOK || hr.image.path != "/healthz" {
+		t.Fatalf("healthz must not depend on User-Service: %d path=%q", rec.Code, hr.image.path)
+	}
+
+	hr.image.path = ""
+	rec = hr.do(withAccess(imageReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("nil users client: %d %s", rec.Code, rec.Body.String())
+	}
+	assertErrorBody(t, rec, "unavailable")
+	if hr.image.path != "" {
+		t.Fatal("must not proxy without a User-Service client")
+	}
+}
+
+func TestImageAnonymousRedirectVs401(t *testing.T) {
+	hr := newImageGW(t)
+	rec := hr.do(imageReq(http.MethodGet, "/"))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("html status %d", rec.Code)
+	}
+	u, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(rec.Header().Get("Location"), "https://filenkov.store/auth?return_to=") {
+		t.Fatalf("location %q", rec.Header().Get("Location"))
+	}
+	if u.Query().Get("return_to") != "https://image.filenkov.store/" {
+		t.Fatalf("return_to %q", u.Query().Get("return_to"))
+	}
+
+	xhr := imageReq(http.MethodGet, "/")
+	xhr.Header.Set("X-Requested-With", "XMLHttpRequest")
+	rec = hr.do(xhr)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("xhr %d", rec.Code)
+	}
+	assertErrorBody(t, rec, "unauthorized")
+
+	rec = hr.do(imageReq(http.MethodPost, "/api/generate"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("POST /api/generate %d", rec.Code)
+	}
+	if hr.image.path != "" {
+		t.Fatalf("anonymous must not proxy, path %q", hr.image.path)
+	}
+	if hr.roles.calls != 0 {
+		t.Fatalf("anonymous requests must not call User-Service, calls=%d", hr.roles.calls)
+	}
+}
+
+func TestImageAllowedRolesProxied(t *testing.T) {
+	for _, role := range []string{"FAMILY", "ADMIN"} {
+		t.Run(role, func(t *testing.T) {
+			hr := newImageGW(t)
+			sub, raw := hr.login("ada@example.com", "ada", "STRANGER")
+			hr.roles.role[sub] = role
+			r := withAccess(imageReq(http.MethodPost, "/api/generate"), raw)
+			r.Header.Set("X-Auth-User-Id", "spoof-user")
+			r.Header.Set("X-Auth-Email", "evil@example.com")
+			r.Header.Set("X-Auth-Name", "evil")
+			r.Header.Set("X-Auth-Role", "ADMIN")
+			r.Header.Set("X-User-Id", "spoof-user")
+			r.Header.Set("X-Storage-Role", "ADMIN")
+			rec := hr.do(r)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+			}
+			if hr.image.method != http.MethodPost || hr.image.path != "/api/generate" {
+				t.Fatalf("upstream %s %q", hr.image.method, hr.image.path)
+			}
+			if hr.image.authID != sub || hr.image.authEmail != "ada@example.com" || hr.image.authName != "ada" {
+				t.Fatalf("x-auth %+v", hr.image)
+			}
+			if hr.image.authRole != "STRANGER" {
+				t.Fatalf("X-Auth-Role must be the hub global_role, got %q", hr.image.authRole)
+			}
+			if hr.image.userID != "" || hr.image.storageRole != "" || hr.image.authorization != "" {
+				t.Fatalf("image host must get only X-Auth-*: %+v", hr.image)
+			}
+			if hr.roles.lastPath != "/users/"+sub+"/roles/image" {
+				t.Fatalf("role lookup path %q", hr.roles.lastPath)
+			}
+			if hr.roles.cookie != "" || hr.roles.authz != "" {
+				t.Fatalf("User-Service role GET leaked credentials cookie=%q auth=%q", hr.roles.cookie, hr.roles.authz)
+			}
+		})
+	}
+}
+
+func TestImageDeniedRolesForbidden(t *testing.T) {
+	cases := []struct {
+		name    string
+		hubRole string
+		role    string // "" = no row, served as STRANGER
+	}{
+		{"no row", "FAMILY", ""},
+		{"stranger", "FAMILY", "STRANGER"},
+		{"blocked", "FAMILY", "BLOCKED"},
+		{"unknown value", "FAMILY", "OWNER"},
+		{"hub admin without image row", "ADMIN", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hr := newImageGW(t)
+			sub, raw := hr.login("ada@example.com", "ada", tc.hubRole)
+			if tc.role != "" {
+				hr.roles.role[sub] = tc.role
+			}
+			rec := hr.do(withAccess(imageReq(http.MethodGet, "/"), raw))
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+			}
+			assertErrorBody(t, rec, "forbidden")
+			if hr.image.path != "" {
+				t.Fatalf("must not proxy, path %q", hr.image.path)
+			}
+			if hr.roles.calls != 1 {
+				t.Fatalf("role lookup calls=%d want 1", hr.roles.calls)
+			}
+		})
+	}
+}
+
+func TestImageHubBlockedAndRejectedForbidden(t *testing.T) {
+	hr := newImageGW(t)
+	_, raw := hr.login("b@b.c", "blocked", "BLOCKED")
+	rec := hr.do(withAccess(imageReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("hub BLOCKED status %d", rec.Code)
+	}
+
+	sub, raw := hr.login("r@b.c", "revoked", "FAMILY")
+	hr.roles.role[sub] = "FAMILY"
+	if err := hr.rej.RejectUser(context.Background(), sub, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rec = hr.do(withAccess(imageReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("rejected_cache user status %d", rec.Code)
+	}
+	if hr.image.path != "" {
+		t.Fatalf("must not proxy, path %q", hr.image.path)
+	}
+	if hr.roles.calls != 0 {
+		t.Fatalf("hub checks must stop before any User-Service call, calls=%d", hr.roles.calls)
+	}
+}
+
+func TestImageRoleLookupFailure(t *testing.T) {
+	hr := newImageGW(t)
+	sub, raw := hr.login("ada@example.com", "ada", "FAMILY")
+	hr.roles.role[sub] = "FAMILY"
+	hr.roles.fail[sub] = http.StatusInternalServerError
+	rec := hr.do(withAccess(imageReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("5xx lookup: %d %s", rec.Code, rec.Body.String())
+	}
+	assertErrorBody(t, rec, "unavailable")
+	if hr.image.path != "" {
+		t.Fatal("must not proxy on User-Service 5xx")
+	}
+
+	hr.roles.fail[sub] = http.StatusNotFound
+	rec = hr.do(withAccess(imageReq(http.MethodGet, "/"), raw))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("404 user: %d %s", rec.Code, rec.Body.String())
+	}
+	assertErrorBody(t, rec, "unauthorized")
+	if hr.image.path != "" {
+		t.Fatal("must not proxy on missing user")
 	}
 }

@@ -32,8 +32,8 @@ type Config struct {
 	GatewayHosts  map[string][]string
 	GatewayConfig string
 
-	// Owl chat. The API talks to the LiteLLM proxy that already fronts
-	// llm.filenkov.store; LLMHost is its OpenAI-compatible base URL.
+	// Owl chat. The API talks to the LiteLLM proxy. That proxy is not the
+	// public host llm.filenkov.store; LLMHost is its OpenAI-compatible base URL.
 	LLMHost   string
 	LLMAPIKey string
 	LLMModel  string

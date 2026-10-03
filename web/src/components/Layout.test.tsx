@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '../auth'
 import { Layout } from './Layout'
 import { admin, jsonResponse, stranger } from '../test/fixtures'
+import type { User } from '../types'
 
 beforeEach(() => {
   vi.stubGlobal('scrollTo', vi.fn())
@@ -46,7 +47,7 @@ describe('Layout', () => {
     expect(await screen.findByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/auth')
 
     for (const [label, href] of [
-      ['LLM', 'https://llm.filenkov.store'],
+      ['Messanger', 'https://messanger.filenkov.store'],
       ['Storage', 'https://storage.filenkov.store'],
       ['Hermes', '/hermes/chat'],
     ]) {
@@ -57,13 +58,15 @@ describe('Layout', () => {
     }
 
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
   })
 
-  it('shows the name, Admin, and unlocked services for admins', async () => {
+  it('shows the name, Admin, Chat, and unlocked services for admins', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(admin)))
     renderLayout()
     expect(await screen.findByText('Boss')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Admin' })).toHaveAttribute('href', '/admin')
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', 'https://llm.filenkov.store')
     expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', '/hermes/chat')
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
     expect(document.querySelectorAll('.service-lock')).toHaveLength(0)
@@ -74,8 +77,48 @@ describe('Layout', () => {
     renderLayout()
     expect(await screen.findByText('Ann')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', '/hermes/chat')
-    expect(screen.getByRole('link', { name: 'LLM' })).not.toHaveAttribute('title')
+    expect(screen.getByRole('link', { name: 'Messanger' })).not.toHaveAttribute('title')
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
+  })
+
+  it.each(['FAMILY', 'ADMIN'] as const)('shows an unlocked Image link for image %s', async (role) => {
+    const person: User = { ...stranger, services: [...stranger.services, { service: 'image', role }] }
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(person)))
+    renderLayout()
+    expect(await screen.findByText('Ann')).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: 'Image' })
+    expect(link).toHaveAttribute('href', 'https://image.filenkov.store')
+    expect(link).not.toHaveAttribute('title')
+    expect(link.querySelector('.service-lock')).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
+    for (const label of ['Messanger', 'Storage', 'Hermes']) {
+      expect(screen.getByRole('link', { name: label })).not.toHaveAttribute('title')
+    }
+  })
+
+  it.each([
+    ['explicit STRANGER', [{ service: 'image', role: 'STRANGER' }]],
+    ['missing row', []],
+    ['BLOCKED', [{ service: 'image', role: 'BLOCKED' }]],
+  ] as const)('hides Image for image %s', async (_, rows) => {
+    const person: User = { ...admin, services: [...rows] }
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(person)))
+    renderLayout()
+    expect(await screen.findByText('Boss')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Admin' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', 'https://llm.filenkov.store')
+    expect(screen.getByRole('link', { name: 'Storage' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Image' })).not.toBeInTheDocument()
+  })
+
+  it('hides Image from guests', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'unauthorized' }, 401)))
+    renderLayout()
+    expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Hermes' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Image' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
   })
 
   it('puts the skip link first in the tab order, pointing at the article', async () => {

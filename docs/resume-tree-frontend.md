@@ -566,21 +566,23 @@ See §13.1 for the prerendering that makes these visible to crawlers.
 **Expanded** (`--header-h`, at the top of the page):
 
 ```
-◆ Filenkov          LLM · Storage · Hermes · Admin          [ Sign in ]
-                                                            or  alexey  [Sign out]
+◆ Filenkov     Messanger · Storage · Hermes · Image · Chat · Admin     [ Sign in ]
+                                                                     or  alexey  [Sign out]
 ```
 
 * Brand mark + wordmark, links to `/`.
-* **Service links** — the "refs to available services" from the brief:
+* **Service links** — the "refs to available services" from the brief, plus later hosts:
 
 | Link | Href | Shown to |
 |---|---|---|
-| LLM | `https://llm.filenkov.store` | everyone |
-| Storage | `https://storage.filenkov.store` | everyone |
-| Hermes | `/hermes/chat` | everyone |
-| Admin | `/admin` | `global_role === 'ADMIN'` only |
+| Messanger | `https://messanger.filenkov.store` | everyone, lock for guests |
+| Storage | `https://storage.filenkov.store` | everyone, lock for guests |
+| Hermes | `/hermes/chat` | everyone, lock for guests |
+| Image | `https://image.filenkov.store` | `image` role `FAMILY` or `ADMIN` only, no lock |
+| Chat | `https://llm.filenkov.store` | hub `global_role === 'ADMIN'` only, no lock |
+| Admin | `/admin` | hub `global_role === 'ADMIN'` only |
 
-Guests see LLM / Storage / Hermes with a small `🔒` and `title="Sign in required"`. They are *not* hidden: the running house is part of the resume, and the gateway already redirects an unauthenticated navigation to `/auth?return_to=…`, so clicking one is a working sign-in path, not a dead end. Admin is hidden from non-admins, because advertising a 403 is noise.
+Guests see Messanger / Storage / Hermes with a small `🔒` and `title="Sign in required"`. They are *not* hidden: the running house is part of the resume, and the gateway already redirects an unauthenticated navigation to `/auth?return_to=…`, so clicking one is a working sign-in path, not a dead end. Image, Chat, and Admin are hidden from people who would get a 403, because advertising that is noise. Chat is the llama.cpp server on `llm.filenkov.store` (`auth: admin`). The hub owl still calls LiteLLM internally.
 
 * Right side: `Sign in` button, or `username` + `Sign out` (existing `useAuth` logic, unchanged).
 

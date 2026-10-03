@@ -255,6 +255,43 @@ describe('Admin', () => {
     expect(screen.getByRole('combobox', { name: /Storage role for Ann/i })).toHaveValue('ADMIN')
   })
 
+  it('shows a fixed Image column before any image row exists and PUTs /users/{id}/roles/image', async () => {
+    const fetchMock = stubDirectory({
+      putRole: (url) => {
+        if (url === `/users/${stranger.id}/roles/image`) {
+          return jsonResponse({ user_id: stranger.id, service: 'image', role: 'FAMILY' })
+        }
+        return jsonResponse({ error: 'unexpected' }, 500)
+      },
+    })
+    const user = userEvent.setup()
+    renderAdmin()
+    expect(await screen.findByText('Ann')).toBeInTheDocument()
+
+    expect(screen.getAllByRole('columnheader', { name: 'Image' })).toHaveLength(1)
+    expect(screen.getByRole('combobox', { name: /Image role for Ann/i })).toHaveValue('STRANGER')
+    expect(screen.getByRole('combobox', { name: /Image role for Boss/i })).toHaveValue('STRANGER')
+
+    await user.selectOptions(screen.getByRole('combobox', { name: /Image role for Ann/i }), 'FAMILY')
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(
+        (c) => String(c[0]) === `/users/${stranger.id}/roles/image` && c[1]?.method === 'PUT',
+      )
+      expect(put).toBeTruthy()
+      expect(put?.[1]?.body).toBe(JSON.stringify({ role: 'FAMILY' }))
+    })
+    expect(screen.getByRole('combobox', { name: /Image role for Ann/i })).toHaveValue('FAMILY')
+  })
+
+  it('does not duplicate the Image column when a row already exists', async () => {
+    const imageUser: User = { ...hermesUser, services: [{ service: 'image', role: 'ADMIN' }] }
+    stubDirectory({ users: [admin, imageUser] })
+    renderAdmin()
+    expect(await screen.findByText('Kay')).toBeInTheDocument()
+    expect(screen.getAllByRole('columnheader', { name: 'Image' })).toHaveLength(1)
+    expect(screen.getByRole('combobox', { name: /Image role for Kay/i })).toHaveValue('ADMIN')
+  })
+
   it('adds a dynamic extra service column from persisted services', async () => {
     const fetchMock = stubDirectory({ users: [admin, hermesUser] })
     const user = userEvent.setup()

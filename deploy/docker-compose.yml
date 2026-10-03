@@ -1,7 +1,13 @@
 # Start the User-Service stack first so external user_network and
 # hostname user_service exist. Auth does not create User-Service.
 # Start the LiteLLM stack so external llm_network and hostname
-# litellm-proxy-server exist before this compose.
+# litellm-proxy-server exist before this compose (owl chat).
+# The one-off llama.cpp container qwen38 must already be on that network
+# so the gateway can reach http://qwen38:4001. Do not add qwen38 here.
+# Start the image stack so external qwen_image_gen_network and hostname
+# qwen-image exist. The network must exist for the gateway to start
+# (`docker network create qwen_image_gen_network` is enough); a stopped
+# qwen-image then fails only image.filenkov.store.
 
 services:
   redis:
@@ -97,6 +103,8 @@ services:
       - auth_network
       - user_network
       - llm_network
+      # image.filenkov.store upstream http://qwen-image:8000.
+      - qwen_image_gen_network
 
 networks:
   auth_network:
@@ -104,4 +112,6 @@ networks:
   user_network:
     external: true
   llm_network:
+    external: true
+  qwen_image_gen_network:
     external: true

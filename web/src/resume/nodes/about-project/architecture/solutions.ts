@@ -63,9 +63,9 @@ export const architectureSolutions: ArchitectureSolution[] = [
   },
   {
     slug: 'llm',
-    title: 'LiteLLM',
+    title: 'Chat',
     summary:
-      'llm.filenkov.store → LiteLLM on :4000, fronting the local model runners on :4001 and :4002. Same cookie at the edge, own network, no token downstream.',
+      'llm.filenkov.store → llama.cpp (container qwen38) on :4001, hub admins only. LiteLLM on :4000 stays internal for the owl chat. Identity headers at the edge, no token downstream.',
     href: 'https://llm.filenkov.store',
   },
   {

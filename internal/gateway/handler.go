@@ -78,12 +78,32 @@ func (s *Server) Handler() http.Handler {
 		if !isWebSocketRequest(r) {
 			applySecurityHeaders(w.Header(), !s.cfg.DevHTTP)
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+		if r.Method == http.MethodGet && r.URL.Path == "/healthz" && !s.hostOwnsHealthz(r.Host) {
 			s.handleHealthz(w, r)
 			return
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// hostOwnsHealthz reports whether the host routes GET /healthz itself via a
+// literal /healthz match. Wildcards and catch-alls do not count, so the hub
+// and the compose healthcheck still get the gateway's own health.
+func (s *Server) hostOwnsHealthz(host string) bool {
+	if s.router == nil {
+		return false
+	}
+	ch, ok := s.router.hosts[hostname(host)]
+	if !ok || ch == nil {
+		return false
+	}
+	for i := range ch.routes {
+		rt := &ch.routes[i]
+		if rt.match == "/healthz" && matchMethods(rt.methods, http.MethodGet) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -121,7 +141,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if status, msg, ok := s.attachStorageRole(r.Context(), host, &id); !ok {
+	if status, msg, ok := s.applyServiceRole(r.Context(), host, route, &id); !ok {
 		writeJSON(w, status, map[string]string{"error": msg})
 		return
 	}

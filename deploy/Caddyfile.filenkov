@@ -11,6 +11,46 @@ https://llm.filenkov.store {
 	reverse_proxy lite-llm:80
 }
 
+https://messanger.filenkov.store {
+	handle {
+		reverse_proxy localhost:8083
+	}
+	tls {
+		protocols tls1.3
+	}
+
+	@notWebsocket {
+		not header Connection *Upgrade*
+	}
+	header @notWebsocket {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}
+
+https://image.filenkov.store {
+	handle {
+		reverse_proxy localhost:8083
+	}
+	tls {
+		protocols tls1.3
+	}
+
+	@notWebsocket {
+		not header Connection *Upgrade*
+	}
+	header @notWebsocket {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}
+
 https://storage.filenkov.store {
 	handle {
 		reverse_proxy localhost:8083
@@ -85,4 +125,8 @@ http://storage.filenkov.store {
 
 http://llm.filenkov.store {
 	redir https://llm.filenkov.store{uri}
+}
+
+http://image.filenkov.store {
+	redir https://image.filenkov.store{uri}
 }

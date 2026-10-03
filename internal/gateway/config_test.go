@@ -139,6 +139,7 @@ func TestLoadDefaultYAML(t *testing.T) {
 	}
 	foundStorage := false
 	foundLLM := false
+	foundMessanger := false
 	for _, n := range names {
 		if n == "storage.filenkov.store" {
 			foundStorage = true
@@ -146,12 +147,30 @@ func TestLoadDefaultYAML(t *testing.T) {
 		if n == "llm.filenkov.store" {
 			foundLLM = true
 		}
+		if n == "messanger.filenkov.store" {
+			foundMessanger = true
+		}
 	}
 	if !foundStorage {
 		t.Fatal("storage.filenkov.store must be enabled")
 	}
 	if !foundLLM {
 		t.Fatal("llm.filenkov.store must be enabled")
+	}
+	if !foundMessanger {
+		t.Fatal("messanger.filenkov.store must be enabled")
+	}
+	foundImage := false
+	for _, n := range names {
+		if n == "image.filenkov.store" {
+			foundImage = true
+		}
+	}
+	if !foundImage {
+		t.Fatal("image.filenkov.store must be enabled")
+	}
+	if got := f.Upstreams["qwen_image"]; got != "http://qwen-image:8000" {
+		t.Fatalf("qwen_image upstream %q", got)
 	}
 	if got := f.Upstreams["api"]; got != "http://api:8000" {
 		t.Fatalf("api upstream %q", got)
@@ -162,11 +181,14 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if got := f.Upstreams["storage"]; got != "http://app:8000" {
 		t.Fatalf("storage upstream %q", got)
 	}
+	if got := f.Upstreams["messanger"]; got != "http://messanger:8000" {
+		t.Fatalf("messanger upstream %q", got)
+	}
 	if got := f.Upstreams["hermes"]; got != "http://hermes:8787" {
 		t.Fatalf("hermes upstream %q", got)
 	}
-	if got := f.Upstreams["litellm"]; got != "http://litellm-proxy-server:4000" {
-		t.Fatalf("litellm upstream %q", got)
+	if got := f.Upstreams["qwen38"]; got != "http://qwen38:4001" {
+		t.Fatalf("qwen38 upstream %q", got)
 	}
 	r, err := f.Router()
 	if err != nil {
@@ -227,6 +249,10 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if !ok || rt.auth != PolicyReject {
 		t.Fatalf("by-google-sub: ok=%v %+v", ok, rt)
 	}
+	_, rt, ok = r.Match("filenkov.store", "/users/by-email/ada@example.com")
+	if !ok || rt.auth != PolicyReject {
+		t.Fatalf("by-email must be rejected at the hub: ok=%v %+v", ok, rt)
+	}
 	_, rt, ok = r.MatchMethod("filenkov.store", "POST", "/users")
 	if !ok || rt.auth != PolicyReject {
 		t.Fatalf("POST /users: ok=%v %+v", ok, rt)
@@ -257,8 +283,26 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if h.proxyTimeout != 30*time.Minute {
 		t.Fatalf("storage proxy timeout %v", h.proxyTimeout)
 	}
+	h, rt, ok = r.Match("messanger.filenkov.store", "/health")
+	if !ok || rt.auth != PolicyPublic || rt.upstreamName != "messanger" || rt.match != "/health" {
+		t.Fatalf("messanger health: ok=%v %+v", ok, rt)
+	}
+	h, rt, ok = r.Match("messanger.filenkov.store", "/api/me")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "messanger" || rt.match != "/*" {
+		t.Fatalf("messanger api must fall through to the catch-all: ok=%v %+v", ok, rt)
+	}
+	h, rt, ok = r.Match("messanger.filenkov.store", "/")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "messanger" || rt.match != "/*" {
+		t.Fatalf("messanger catch-all: ok=%v %+v", ok, rt)
+	}
+	if h.roleField != "global_role" {
+		t.Fatalf("messanger role_field %q", h.roleField)
+	}
+	if h.proxyTimeout != 5*time.Minute {
+		t.Fatalf("messanger proxy timeout %v", h.proxyTimeout)
+	}
 	h, rt, ok = r.Match("llm.filenkov.store", "/")
-	if !ok || rt.auth != PolicySession || rt.upstreamName != "litellm" {
+	if !ok || rt.auth != PolicyAdmin || rt.upstreamName != "qwen38" || rt.injectAccessJWT {
 		t.Fatalf("llm catch-all: ok=%v %+v", ok, rt)
 	}
 	if h.roleField != "global_role" {
@@ -267,12 +311,36 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if h.proxyTimeout != 10*time.Minute {
 		t.Fatalf("llm proxy timeout %v", h.proxyTimeout)
 	}
+	_, rt, ok = r.MatchMethod("image.filenkov.store", http.MethodGet, "/healthz")
+	if !ok || rt.auth != PolicyPublic || rt.upstreamName != "qwen_image" || rt.match != "/healthz" {
+		t.Fatalf("image healthz: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.MatchMethod("image.filenkov.store", http.MethodPost, "/api/generate")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "qwen_image" || rt.match != "/*" {
+		t.Fatalf("image generate must fall through to the session catch-all: ok=%v %+v", ok, rt)
+	}
+	h, rt, ok = r.Match("image.filenkov.store", "/")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "qwen_image" || rt.match != "/*" {
+		t.Fatalf("image catch-all: ok=%v %+v", ok, rt)
+	}
+	if h.roleField != "image" {
+		t.Fatalf("image role_field %q", h.roleField)
+	}
+	if h.proxyTimeout != 30*time.Minute {
+		t.Fatalf("image proxy timeout %v", h.proxyTimeout)
+	}
 	m := f.AllowedHostsMap()
+	if _, ok := m["image.filenkov.store"]; !ok {
+		t.Fatal("return_to allowlist must include image.filenkov.store")
+	}
 	if _, ok := m["storage.filenkov.store"]; !ok {
 		t.Fatal("return_to allowlist must include storage.filenkov.store")
 	}
 	if _, ok := m["llm.filenkov.store"]; !ok {
 		t.Fatal("return_to allowlist must include llm.filenkov.store")
+	}
+	if _, ok := m["messanger.filenkov.store"]; !ok {
+		t.Fatal("return_to allowlist must include messanger.filenkov.store")
 	}
 }
 
@@ -313,6 +381,46 @@ hosts:
 	h, _, ok = r.Match("filenkov.store", "/")
 	if !ok || h.proxyTimeout != 0 {
 		t.Fatalf("hub must use file default, got %v", h.proxyTimeout)
+	}
+}
+
+func TestParseRoleFieldImage(t *testing.T) {
+	f, err := Parse([]byte(`
+upstreams:
+  qwen_image: "http://qwen-image:8000"
+hosts:
+  image.filenkov.store:
+    role_field: image
+    routes:
+      - match: /*
+        upstream: qwen_image
+        auth: session
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := f.Router()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, _, ok := r.Match("image.filenkov.store", "/")
+	if !ok || h.roleField != "image" {
+		t.Fatalf("ok=%v role_field=%q", ok, h.roleField)
+	}
+
+	_, err = Parse([]byte(`
+upstreams:
+  qwen_image: "http://qwen-image:8000"
+hosts:
+  image.filenkov.store:
+    role_field: images
+    routes:
+      - match: /*
+        upstream: qwen_image
+        auth: session
+`))
+	if err == nil || !strings.Contains(err.Error(), `unknown role_field "images"`) || !strings.Contains(err.Error(), "or image)") {
+		t.Fatalf("unknown role_field must still error: %v", err)
 	}
 }
 

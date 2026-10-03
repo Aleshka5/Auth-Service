@@ -1,6 +1,43 @@
+import { useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { googleAuthPath } from '../api'
 import { useAuth } from '../auth'
+
+const hubHost = 'filenkov.store'
+
+function isLoopback(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1'
+}
+
+/** Where to send a restored session. Same-origin paths, https on filenkov.store, or loopback in local dev. */
+export function continueTarget(raw: string | null, pageOrigin = window.location.origin): string | null {
+  if (!raw) return null
+  let page: URL
+  let dest: URL
+  try {
+    page = new URL(pageOrigin)
+    dest = new URL(raw, pageOrigin)
+  } catch {
+    return null
+  }
+  if (dest.username || dest.password) return null
+  if (dest.origin === page.origin) {
+    return `${dest.pathname}${dest.search}${dest.hash}` || '/'
+  }
+  const host = dest.hostname.toLowerCase()
+  if (isLoopback(host) && isLoopback(page.hostname) && (dest.protocol === 'http:' || dest.protocol === 'https:')) {
+    return dest.href
+  }
+  if (dest.protocol !== 'https:') return null
+  if (host !== hubHost && !host.endsWith(`.${hubHost}`)) return null
+  return dest.href
+}
+
+export const navigation = {
+  assign(href: string) {
+    window.location.assign(href)
+  },
+}
 
 function GoogleMark() {
   return (
@@ -13,24 +50,17 @@ function GoogleMark() {
   )
 }
 
-function sameOriginReturnTo(raw: string | null): string | null {
-  if (!raw) return null
-  try {
-    const u = new URL(raw, window.location.origin)
-    if (u.username || u.password) return null
-    if (u.origin !== window.location.origin) return null
-    return `${u.pathname}${u.search}${u.hash}` || '/'
-  } catch {
-    return null
-  }
-}
-
 export function Auth() {
   const { user, loading } = useAuth()
   const [params] = useSearchParams()
   const returnTo = params.get('return_to')
   const href = googleAuthPath(returnTo)
-  const continueHref = sameOriginReturnTo(returnTo)
+  const resumeHref = continueTarget(returnTo)
+
+  useEffect(() => {
+    if (loading || !user || !resumeHref) return
+    navigation.assign(resumeHref)
+  }, [loading, user, resumeHref])
 
   return (
     <section className="auth-page">
@@ -43,20 +73,20 @@ export function Auth() {
         </p>
         {loading ? (
           <p className="muted">Checking sign-in…</p>
+        ) : user && resumeHref ? (
+          <>
+            <p>
+              Signed in as <strong>{user.username}</strong>. Sending you back.
+            </p>
+            <a className="btn" href={resumeHref}>
+              Continue to destination
+            </a>
+          </>
         ) : user ? (
           <>
             <p>
               You are already signed in as <strong>{user.username}</strong>.
             </p>
-            {continueHref ? (
-              <a className="btn" href={continueHref}>
-                Continue to destination
-              </a>
-            ) : returnTo ? (
-              <a className="btn" href={href}>
-                Continue to destination
-              </a>
-            ) : null}
             <Link className="btn btn-ghost" to="/">
               Back home
             </Link>

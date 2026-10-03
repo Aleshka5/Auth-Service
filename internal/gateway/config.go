@@ -22,13 +22,20 @@ const (
 
 const (
 	roleAdmin   = "ADMIN"
+	roleFamily  = "FAMILY"
 	roleBlocked = "BLOCKED"
 )
 
+const (
+	roleFieldStorage = "storage"
+	roleFieldImage   = "image"
+)
+
 var knownRoleFields = map[string]struct{}{
-	"global_role": {},
-	"storage":     {},
-	"resume":      {},
+	"global_role":    {},
+	roleFieldStorage: {},
+	"resume":         {},
+	roleFieldImage:   {},
 }
 
 // File is the on-disk gateway YAML.
@@ -251,7 +258,7 @@ func compileHost(name string, h *Host, upstreams map[string]string) (*compiledHo
 		roleField = "global_role"
 	}
 	if _, ok := knownRoleFields[roleField]; !ok {
-		return nil, fmt.Errorf("hosts.%s: unknown role_field %q (want global_role, storage, or resume)", name, roleField)
+		return nil, fmt.Errorf("hosts.%s: unknown role_field %q (want global_role, storage, resume, or image)", name, roleField)
 	}
 	if len(h.Routes) == 0 {
 		return nil, fmt.Errorf("hosts.%s: at least one route is required", name)

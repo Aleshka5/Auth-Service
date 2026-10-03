@@ -126,7 +126,7 @@ func (s *Server) applyProxyIdentity(pr *httputil.ProxyRequest, t proxyTarget) {
 	}
 	if t.id.claims != nil {
 		injectIdentity(pr.Out.Header, t.id.claims)
-		if t.host != nil && t.host.roleField == "storage" {
+		if t.host != nil && t.host.roleField == roleFieldStorage {
 			pr.Out.Header.Set("X-User-Id", t.id.claims.Sub())
 			if t.id.storageRole != "" {
 				pr.Out.Header.Set("X-Storage-Role", t.id.storageRole)
@@ -156,25 +156,54 @@ func injectHermesDashboardAuth(pr *httputil.ProxyRequest, t proxyTarget) {
 	}
 }
 
-func (s *Server) attachStorageRole(ctx context.Context, host *compiledHost, id *accessIdentity) (status int, msg string, ok bool) {
-	if host == nil || host.roleField != "storage" || id == nil || id.claims == nil {
+// applyServiceRole runs the per-host User-Service role step after authorize.
+// storage: look up on every route and forward the role (never denies on it).
+// image: look up on non-public routes only; proxy FAMILY/ADMIN, deny the rest.
+func (s *Server) applyServiceRole(ctx context.Context, host *compiledHost, route *compiledRoute, id *accessIdentity) (status int, msg string, ok bool) {
+	if host == nil || id == nil || id.claims == nil {
 		return 0, "", true
 	}
-	if s.users == nil {
-		slog.Error("gateway_storage_role", "err", "user-service client is not configured")
-		return http.StatusServiceUnavailable, "unavailable", false
+	switch host.roleField {
+	case roleFieldStorage:
+		role, status, msg, ok := s.lookupServiceRole(ctx, roleFieldStorage, id)
+		if ok {
+			id.storageRole = role
+		}
+		return status, msg, ok
+	case roleFieldImage:
+		if route == nil || route.auth == PolicyPublic {
+			return 0, "", true
+		}
+		role, status, msg, ok := s.lookupServiceRole(ctx, roleFieldImage, id)
+		if !ok {
+			return status, msg, ok
+		}
+		if role != roleFamily && role != roleAdmin {
+			slog.Warn("gateway_image_forbidden", "user_id", id.claims.Sub(), "host", host.name, "role", role)
+			return http.StatusForbidden, "forbidden", false
+		}
+		return 0, "", true
+	default:
+		return 0, "", true
 	}
-	sr, err := s.users.GetServiceRole(ctx, id.claims.Sub(), "storage")
+}
+
+func (s *Server) lookupServiceRole(ctx context.Context, service string, id *accessIdentity) (role string, status int, msg string, ok bool) {
+	event := "gateway_" + service + "_role"
+	if s.users == nil {
+		slog.Error(event, "err", "user-service client is not configured")
+		return "", http.StatusServiceUnavailable, "unavailable", false
+	}
+	sr, err := s.users.GetServiceRole(ctx, id.claims.Sub(), service)
 	if err != nil {
 		if usersvc.IsNotFound(err) {
-			slog.Warn("gateway_storage_role_missing_user", "user_id", id.claims.Sub())
-			return http.StatusUnauthorized, "unauthorized", false
+			slog.Warn(event+"_missing_user", "user_id", id.claims.Sub())
+			return "", http.StatusUnauthorized, "unauthorized", false
 		}
-		slog.Error("gateway_storage_role", "err", err, "user_id", id.claims.Sub())
-		return http.StatusServiceUnavailable, "unavailable", false
+		slog.Error(event, "err", err, "user_id", id.claims.Sub())
+		return "", http.StatusServiceUnavailable, "unavailable", false
 	}
-	id.storageRole = string(sr.Role)
-	return 0, "", true
+	return string(sr.Role), 0, "", true
 }
 
 func (s *Server) maybeRejectTargetUser(resp *http.Response) {

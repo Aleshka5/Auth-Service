@@ -15,7 +15,7 @@ import {
   type User,
 } from '../types'
 
-const FIXED_SERVICES = ['storage', 'resume'] as const
+const FIXED_SERVICES = ['storage', 'resume', 'image'] as const
 
 function roleFor(user: User, field: 'global' | string): Role {
   if (field === 'global') return user.global_role
@@ -105,7 +105,7 @@ export function Admin() {
     }
   }, [loading, user])
 
-  const extras = useMemo(() => extraServiceKeys(people), [people])
+  const serviceColumns = useMemo(() => [...FIXED_SERVICES, ...extraServiceKeys(people)], [people])
   const filtered = useMemo(() => {
     const q = emailQuery.trim().toLowerCase()
     if (!q) return people
@@ -180,9 +180,7 @@ export function Admin() {
                     <th>Username</th>
                     <th>Email</th>
                     <th>Global role</th>
-                    <th>Storage</th>
-                    <th>Resume</th>
-                    {extras.map((service) => (
+                    {serviceColumns.map((service) => (
                       <th key={service}>{titleService(service)}</th>
                     ))}
                   </tr>
@@ -202,27 +200,7 @@ export function Admin() {
                           onChange={onRoleChange}
                         />
                       </td>
-                      <td>
-                        <RoleSelect
-                          user={person}
-                          field="storage"
-                          label={`Storage role for ${person.username}`}
-                          roles={SERVICE_ROLES}
-                          disabled={busy}
-                          onChange={onRoleChange}
-                        />
-                      </td>
-                      <td>
-                        <RoleSelect
-                          user={person}
-                          field="resume"
-                          label={`Resume role for ${person.username}`}
-                          roles={SERVICE_ROLES}
-                          disabled={busy}
-                          onChange={onRoleChange}
-                        />
-                      </td>
-                      {extras.map((service) => (
+                      {serviceColumns.map((service) => (
                         <td key={service}>
                           <RoleSelect
                             user={person}

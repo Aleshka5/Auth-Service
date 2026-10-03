@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { useScrollChrome } from '../hooks/useScrollChrome'
-import { isAdmin } from '../types'
+import { isAdmin, serviceRole } from '../types'
 import { Owl } from './owl/Owl'
 
 function Mark() {
@@ -15,13 +15,14 @@ function Mark() {
 }
 
 /**
- * Service links (§7.1). Guests see LLM / Storage / Hermes with a lock rather
+ * Service links (§7.1). Guests see Messanger / Storage / Hermes with a lock rather
  * than not at all: the gateway redirects an unauthenticated navigation to
- * `/auth?return_to=…`, so clicking one is a working sign-in path. Admin is
- * hidden from non-admins, because advertising a 403 is noise.
+ * `/auth?return_to=…`, so clicking one is a working sign-in path. Admin and
+ * Chat are hidden unless hub `global_role` is ADMIN, because advertising a
+ * 403 is noise. Image is shown only for `image` FAMILY or ADMIN, never locked.
  */
 const services = [
-  { label: 'LLM', href: 'https://llm.filenkov.store' },
+  { label: 'Messanger', href: 'https://messanger.filenkov.store' },
   { label: 'Storage', href: 'https://storage.filenkov.store' },
   { label: 'Hermes', href: '/hermes/chat' },
 ] as const
@@ -31,6 +32,8 @@ export function Layout() {
   const [departing, setDeparting] = useState(false)
   const [departNonce, setDepartNonce] = useState(0)
   const admin = isAdmin(user)
+  const imageRole = user ? serviceRole(user, 'image') : null
+  const image = imageRole === 'FAMILY' || imageRole === 'ADMIN'
 
   useScrollChrome()
 
@@ -67,6 +70,8 @@ export function Layout() {
               )}
             </a>
           ))}
+          {image ? <a href="https://image.filenkov.store">Image</a> : null}
+          {admin ? <a href="https://llm.filenkov.store">Chat</a> : null}
           {admin ? <Link to="/admin">Admin</Link> : null}
         </nav>
         <div className="header-right">

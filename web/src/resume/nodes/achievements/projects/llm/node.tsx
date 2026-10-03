@@ -9,10 +9,10 @@ export default function LlmNode() {
       </p>
       <p>
         The host is a proxy route like any other. The gateway matches{' '}
-        <strong>llm.filenkov.store</strong>, requires a signed-in user, and forwards to the model proxy
-        on an internal network — the proxy port is never published on a public interface. The model stack
-        keeps its own configuration and its own idea of which backends exist; the only thing it receives
-        from the edge is a set of identity headers describing who is asking.
+        <strong>llm.filenkov.store</strong>, allows only a hub admin, and forwards to the llama.cpp
+        server on an internal network. The only thing that server receives from the edge is a set of
+        identity headers describing who is asking. The owl on this resume still talks to LiteLLM
+        inside the network; this host is the model server itself.
       </p>
       <p>
         Keeping the workspace on a separate subdomain rather than a path under the hub was a deliberate

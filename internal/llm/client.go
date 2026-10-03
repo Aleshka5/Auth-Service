@@ -1,6 +1,6 @@
 // Package llm asks an OpenAI-compatible chat-completions endpoint one question
-// at a time. The endpoint is the LiteLLM proxy that already fronts
-// llm.filenkov.store; nothing here keeps conversation state.
+// at a time. The endpoint is the LiteLLM proxy (LLM_HOST), not the public
+// host llm.filenkov.store; nothing here keeps conversation state.
 package llm
 
 import (

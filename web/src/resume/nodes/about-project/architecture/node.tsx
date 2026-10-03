@@ -79,8 +79,9 @@ function MapBody() {
         Below the gateway the map fans out into one lane per host, and each lane is its own compose
         network. <code>filenkov.store</code> is this SPA plus the internal auth API that talks to Google.{' '}
         <code>storage.filenkov.store</code> is the file cloud, which additionally receives the role it is
-        allowed to act on rather than the hub role. <code>llm.filenkov.store</code> is LiteLLM in front of
-        the local model runners. Hermes gets the access JWT as a bearer header so the agent workspace does
+        allowed to act on rather than the hub role. <code>llm.filenkov.store</code> is a llama.cpp
+        server that only a hub admin may open. LiteLLM stays on the internal network for the owl
+        chat. Hermes gets the access JWT as a bearer header so the agent workspace does
         not ask for a second login, and MLflow sits behind client-certificate validation instead of the
         cookie. None of these services sees a token it has to verify itself, and none of them holds a
         session.
