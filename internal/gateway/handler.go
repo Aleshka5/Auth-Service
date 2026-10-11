@@ -33,15 +33,17 @@ type proxyTarget struct {
 
 // Server is the public HTTP edge: routing, JWT auth, reverse proxy.
 type Server struct {
-	cfg      *config.Config
-	file     *File
-	router   *Router
-	tokens   *token.Service
-	rej      *rejected.Cache
-	limiter  *ratelimit.Limiter
-	users    *usersvc.Client
-	sessions *sid.Store
-	proxy    *httputil.ReverseProxy
+	cfg            *config.Config
+	file           *File
+	router         *Router
+	tokens         *token.Service
+	rej            *rejected.Cache
+	limiter        *ratelimit.Limiter
+	users          *usersvc.Client
+	sessions       *sid.Store
+	proxy          *httputil.ReverseProxy
+	refreshClient  *http.Client
+	refreshFlights *refreshFlights
 }
 
 func New(cfg *config.Config, file *File, tokens *token.Service, rej *rejected.Cache, limiter *ratelimit.Limiter, users *usersvc.Client, sessions *sid.Store) (*Server, error) {
@@ -56,14 +58,16 @@ func New(cfg *config.Config, file *File, tokens *token.Service, rej *rejected.Ca
 		return nil, err
 	}
 	s := &Server{
-		cfg:      cfg,
-		file:     file,
-		router:   router,
-		tokens:   tokens,
-		rej:      rej,
-		limiter:  limiter,
-		users:    users,
-		sessions: sessions,
+		cfg:            cfg,
+		file:           file,
+		router:         router,
+		tokens:         tokens,
+		rej:            rej,
+		limiter:        limiter,
+		users:          users,
+		sessions:       sessions,
+		refreshClient:  newRefreshClient(),
+		refreshFlights: &refreshFlights{},
 	}
 	s.proxy = s.newProxy()
 	return s, nil
@@ -130,6 +134,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		slog.Error("gateway_token", "err", err, "path", r.URL.Path)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "auth unavailable"})
 		return
+	}
+	if id.claims == nil && routeNeedsAccess(route.auth) {
+		ok, status := s.silentRefresh(w, r)
+		if ok {
+			id, err = s.lookupAccess(r)
+			if err != nil {
+				slog.Error("gateway_token", "err", err, "path", r.URL.Path)
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "auth unavailable"})
+				return
+			}
+		} else if status != 0 && status != http.StatusUnauthorized {
+			msg := "auth unavailable"
+			if status == http.StatusForbidden {
+				msg = "blocked"
+			}
+			if status == http.StatusTooManyRequests {
+				msg = "rate limit exceeded"
+			}
+			writeJSON(w, status, map[string]string{"error": msg})
+			return
+		}
 	}
 
 	if !s.authorize(w, r, route.auth, id) {

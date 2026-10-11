@@ -21,7 +21,7 @@ Live hosts today: `filenkov.store`, `storage.filenkov.store`, `messanger.filenko
 
 Qwen Image is one Flask process (UI + `POST /api/generate`) on container port `8000`. A frame can take minutes. The gateway default proxy timeout is 60s.
 
-The image container is reached on Docker/Podman network **`qwen_image_gen_network`**, not `auth_network`. Compose service / container name on that network: **`qwen-image`**.
+The image container is reached on Podman network **`qwen_image_gen_network`**, not `auth_network`. Compose service / container name on that network: **`qwen-image`**.
 
 ## 2. Who is allowed
 
@@ -145,6 +145,6 @@ Until step 2, only `image.filenkov.store` errors. The hub and the other hosts st
 Decisions and deviations:
 
 1. Public routes on the image host skip the role lookup, so `/healthz` stays reachable for a signed-in `STRANGER` and while User-Service is down.
-2. A missing `qwen_image_gen_network` stops the whole gateway container from starting — Compose refuses a missing `external` network, same as `llm_network`. §7 and §11 ("only the image host fails") hold only once the network exists and `qwen-image` is down. Create the network first (`docker network create qwen_image_gen_network`) if the image stack is not up.
+2. A missing `qwen_image_gen_network` stops the whole gateway container from starting — Compose refuses a missing `external` network, same as `llm_network`. §7 and §11 ("only the image host fails") hold only once the network exists and `qwen-image` is down. Create the network first (`podman network create qwen_image_gen_network`) if the image stack is not up.
 3. As on storage, messenger, and LLM, the browser `Cookie` header is forwarded, so `auth_access` reaches the image app as a cookie. No `Authorization` header is set.
 4. The role is looked up on every non-public request (UI assets included), like storage. There is no cache.

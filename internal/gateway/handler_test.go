@@ -58,6 +58,7 @@ func newUpstream(t *testing.T) (*httptest.Server, *probe) {
 	t.Helper()
 	p := &probe{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
 		p.method = r.Method
 		p.path = r.URL.Path
 		p.host = r.Host
@@ -73,7 +74,6 @@ func newUpstream(t *testing.T) (*httptest.Server, *probe) {
 		p.spoofedLeft = r.Header.Get("X-Auth-Spoof")
 		p.forwardedHost = r.Header.Get("X-Forwarded-Host")
 		p.forwardedPrefix = r.Header.Get("X-Forwarded-Prefix")
-		p.mu.Lock()
 		fn := p.responder
 		p.mu.Unlock()
 		if fn != nil {

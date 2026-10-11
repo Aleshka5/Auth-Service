@@ -17,7 +17,7 @@ deploy/           docker-compose.yml, Dockerfiles, gateway.yaml
 docs/             auth-gateway.md, user-story-*.md (directory contract, storage host, admin directory list, messenger host CR, image host CR — shipped)
 ```
 
-## Quick start (Docker Compose)
+## Quick start (Podman Compose)
 
 Start the **User-Service** stack first so external network `user_network` and hostname `user_service` exist. Start the **LiteLLM** stack so `llm_network` and hostname `litellm-proxy-server` exist (owl chat), and have the one-off llama.cpp container `qwen38` already on that network. Start the **image** stack so `qwen_image_gen_network` and hostname `qwen-image` exist. Auth compose **attaches** those networks; it does not create User-Service, LiteLLM, `qwen38`, or the image service.
 
@@ -46,8 +46,8 @@ Start the **User-Service** stack first so external network `user_network` and ho
 4. Run from the repo root:
 
    ```bash
-   docker compose --env-file .env -f deploy/docker-compose.yml up --build
-   # or: podman compose --env-file .env -f deploy/docker-compose.yml up --build
+   podman compose --env-file .env -f deploy/docker-compose.yml up --build
+   # or: make rebuild
    ```
 
    Networks: `auth_network` (created here) + `user_network` (`external: true`) + `llm_network` (`external: true`) + `qwen_image_gen_network` (`external: true`, gateway only). Services: `redis` (`redis:7-alpine`), `web`, `api`, `gateway`.
@@ -63,7 +63,7 @@ Start the **User-Service** stack first so external network `user_network` and ho
 
    Gateway process health: `GET http://127.0.0.1:8083/healthz` (not the proxied `/health`). API healthcheck: `GET http://127.0.0.1:8000/health` inside the container (Redis ping).
 
-If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail. If `qwen38` is down, `llm.filenkov.store` returns a gateway proxy error for a hub `ADMIN`. If `litellm-proxy-server` is down, the hub owl chat fails and sign-in still works. If `messanger` is down, `messanger.filenkov.store` returns a gateway proxy error on that host only. If `qwen-image` is down, `image.filenkov.store` returns a gateway proxy error on that host only; the image **network** must still exist for the gateway container to start (`docker network create qwen_image_gen_network` if the image stack is not up yet).
+If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail. If `qwen38` is down, `llm.filenkov.store` returns a gateway proxy error for a hub `ADMIN`. If `litellm-proxy-server` is down, the hub owl chat fails and sign-in still works. If `messanger` is down, `messanger.filenkov.store` returns a gateway proxy error on that host only. If `qwen-image` is down, `image.filenkov.store` returns a gateway proxy error on that host only; the image **network** must still exist for the gateway container to start (`podman network create qwen_image_gen_network` if the image stack is not up yet).
 
 Operator order: User-Service stack, LiteLLM stack (so `llm_network` and `litellm-proxy-server` exist for owl chat) with `qwen38` already on that network, image stack (so `qwen_image_gen_network` and `qwen-image` exist), Auth stack, Common (WebStorage data volumes), then WebStorage (`app` joins `auth_network` as external so `http://app:8000` resolves) and HomeMessanger (`messanger` joins the same network so `http://messanger:8000` resolves).
 

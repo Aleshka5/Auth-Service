@@ -54,7 +54,7 @@ The gateway process health endpoint is **`GET /healthz`**. It is answered **befo
 | User-Service | Directory (external compose). Gateway proxies `/users/*`; API calls it on `user_network` for login/`/api/me` |
 | Caddy (host) | TLS terminator → `127.0.0.1:8083` |
 
-Gateway and API share **Redis** (`rejected_cache`, OAuth state, rate limits, companion `session:{sid}`) and **`JWT_SECRET`**. Neither talks to Auth Postgres. The gateway does not mint JWTs. The gateway calls User-Service only to fill `X-Storage-Role` on hosts with `role_field: storage`.
+Gateway and API share **Redis** (`rejected_cache`, OAuth state, rate limits, companion `session:{sid}`) and **`JWT_SECRET`**. Neither talks to Auth Postgres. The gateway does not mint JWTs. When a `session` or `admin` route has no usable access cookie and the browser still sent `auth_refresh`, the gateway `POST`s the Auth API `/api/refresh` (single-flight per refresh token), copies the new cookies onto the response, and continues the original request. The gateway calls User-Service only to fill `X-Storage-Role` on hosts with `role_field: storage` and to enforce the `image` role.
 
 ## YAML schema
 
@@ -235,16 +235,19 @@ Messenger host (`messanger.filenkov.store`): one upstream `messanger` → `http:
 
 Image host (`image.filenkov.store`): one upstream `qwen_image` → `http://qwen-image:8000` (Qwen Image, one Flask process for UI + `POST /api/generate`) on external `qwen_image_gen_network`. `GET /healthz` is public and proxied to the app. The catch-all is `auth: session` (anonymous HTML → **302** hub login; `/api/*` and XHR → **401**) and, with `role_field: image`, also requires the User-Service `image` role to be `FAMILY` or `ADMIN` — hub `global_role` does not count, so a hub `ADMIN` with no `image` row gets **403**. Grant it in `/admin`. `X-Auth-*` only; no `X-User-Id`, no `X-Image-Role`, no JWT. Per-host proxy timeout **30m**. If `qwen-image` is down, only this host returns a proxy error.
 
-LLM host (`llm.filenkov.store`): one upstream `qwen38` → `http://qwen38:4001` (llama.cpp server, container name `qwen38`, not in this compose, already attached to external `llm_network`). Catch-all `auth: admin` (anonymous HTML → **302** hub login; a signed-in non-admin → **403**). Hub `global_role` is injected as `X-Auth-Role`. No User-Service call and no access JWT. Per-host proxy timeout **10m** (slow first token). The hub header shows **Chat** to hub admins only. Owl chat still calls LiteLLM at `litellm-proxy-server:4000` via `LLM_HOST`; this host is not that proxy. Do not reach `qwen38` through a published host port.
+LLM host (`llm.filenkov.store`): one upstream `qwen38` → `http://qwen38:4001` (llama.cpp server, container name `qwen38`, not in this compose, already attached to external `llm_network`). Catch-all `auth: admin` (anonymous HTML → **302** hub login; a signed-in non-admin → **403**). An expired access cookie with a live `auth_refresh` is refreshed in place, so the llama.cpp UI keeps working without a trip to `/auth`. Hub `global_role` is injected as `X-Auth-Role`. No User-Service call and no access JWT. Per-host proxy timeout **10m** (slow first token). The hub header shows **Chat** to hub admins only. Owl chat still calls LiteLLM at `litellm-proxy-server:4000` via `LLM_HOST`; this host is not that proxy. Do not reach `qwen38` through a published host port.
 
 ## Auth decisions (redirect vs 401 vs 403)
 
-If the route is not `public`, a missing access JWT, a rejected jti, or `BLOCKED` / user revocation is not proxied.
+If the route is not `public`, a missing access JWT, a rejected jti, or `BLOCKED` / user revocation is not proxied. A missing or expired access JWT with a still-valid `auth_refresh` is refreshed first (below); only a failed refresh is anonymous.
 
 | Situation | Browser / HTML navigation | API / non-browser |
 |-----------|---------------------------|-------------------|
 | Anonymous on `public` | Proxy | Proxy |
-| Anonymous on `session` or `admin` | **302** to `{public_origin}/auth?return_to=` original URL | **401** JSON `{"error":"unauthorized"}` |
+| No usable access JWT, valid `auth_refresh`, on `session` or `admin` | Internal `POST /api/refresh`, then proxy with the new access cookie | same |
+| Anonymous on `session` or `admin` (no refresh, or refresh 401) | **302** to `{public_origin}/auth?return_to=` original URL | **401** JSON `{"error":"unauthorized"}` |
+| Refresh says blocked | **403** JSON `{"error":"blocked"}` | same |
+| Refresh call fails (network, API 5xx) | **503** JSON `{"error":"auth unavailable"}` | same |
 | Access JWT + `BLOCKED` or `rejected:user:` (any non-public route) | **403** JSON `{"error":"blocked"}` | same |
 | Access JWT + not `ADMIN` on `admin` route | **403** JSON `{"error":"forbidden"}` | same |
 | Access JWT + `image` role not `FAMILY`/`ADMIN` on an image-host non-public route | **403** JSON `{"error":"forbidden"}` | same |
@@ -324,7 +327,7 @@ WebSocket (Hermes chat PTY): see [hermes.md](hermes.md). `httputil.ReverseProxy`
 
 ## JWT at the edge
 
-Cookies `auth_access` / `auth_refresh` (`HttpOnly`, `SameSite=Lax`, `Secure` unless `AUTH_DEV_HTTP`). The gateway validates **access** only (signature, `typ`, `exp`, `aud`/`iss`) plus Redis `rejected_cache`. It does not mint tokens. JWT `aud` includes every host in the gateway YAML (so `storage.filenkov.store`, `messanger.filenkov.store`, `image.filenkov.store`, and `llm.filenkov.store` are valid audiences).
+Cookies `auth_access` / `auth_refresh` (`HttpOnly`, `SameSite=Lax`, `Secure` unless `AUTH_DEV_HTTP`). The gateway validates **access** only (signature, `typ`, `exp`, `aud`/`iss`) plus Redis `rejected_cache`. It does not mint tokens. On `session` and `admin` routes, a missing or expired access cookie is not immediately anonymous: if `auth_refresh` is present the gateway calls the Auth API `POST /api/refresh` directly (not via the public hop), forwards `X-Forwarded-For` so the API rate limit stays per client, and single-flights that call per refresh token so concurrent llama.cpp / storage / image requests cannot rotate the refresh cookie out from under each other. A 200 copies `Set-Cookie` for `auth_access`, `auth_refresh`, and `auth_session` onto the client response and retries authorization with the new access token. A 401 clears cookies and falls through to the anonymous redirect or 401. The Auth API still performs rotation, User-Service lookup, and `rejected_cache` checks. JWT `aud` includes every host in the gateway YAML (so `storage.filenkov.store`, `messanger.filenkov.store`, `image.filenkov.store`, and `llm.filenkov.store` are valid audiences).
 
 Companion cookie **`auth_session`**: opaque 32-byte hex sid, same cookie flags as the JWTs, TTL = `JWT_REFRESH_TTL`. Redis `session:{sid}` → User-Service UUID. Issued on Google callback; **kept** (TTL extended) on `POST /api/refresh` if the cookie still maps to that user; cleared and deleted on `POST /api/logout` and when the user is revoked. Not checked at the edge — missing sid does not block proxy to storage.
 
@@ -339,13 +342,13 @@ Gateway rejects an access JWT if:
 
 Auth API issues tokens after Google login and on `POST /api/refresh`. It must not set cookies when User-Service `global_role == BLOCKED`.
 
-## Docker topology and env
+## Podman topology and env
 
 Compose networks: **`auth_network`** (created here), **`user_network`** (`external: true`), and **`llm_network`** (`external: true`). `web` and `redis` sit only on `auth_network`. `api` and `gateway` attach `user_network` so they can reach `user_service:8000`. The gateway also attaches `llm_network` so it can reach `qwen38:4001`. The API attaches the same network so owl chat can reach `litellm-proxy-server:4000`.
 
 WebStorage’s `app` container must join **`auth_network` as `external: true`** so the gateway can reach `http://app:8000`. Do not publish WebStorage as a second public edge. Hermes is started from `hermes-auth-gateway` compose on the same network (`http://hermes:8787`). Do not publish Hermes `:8787` on a public interface. Dashboard auth: JWT plugin only ([hermes.md](hermes.md)). **`llm_network`** is external. The gateway joins it so `http://qwen38:4001` resolves (`qwen38` is a one-off llama.cpp container, not a compose service). The API joins it so owl chat can reach `http://litellm-proxy-server:4000`. Do not publish LiteLLM `:4000` on a public interface. The gateway does not use a host-published port for `qwen38`.
 
-Upstreams use **container names**. Hermes is the `hermes` container on **`auth_network`** (`hermes-auth-gateway` compose joins that network as `external: true`, default Docker name `deploy_auth_network`):
+Upstreams use **container names**. Hermes is the `hermes` container on **`auth_network`** (`hermes-auth-gateway` compose joins that network as `external: true`, default Podman network name `deploy_auth_network`):
 
 ```text
 hermes: "http://hermes:8787"
