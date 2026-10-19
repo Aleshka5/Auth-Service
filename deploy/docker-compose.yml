@@ -8,6 +8,9 @@
 # qwen-image exist. The network must exist for the gateway to start
 # (`podman network create qwen_image_gen_network` is enough); a stopped
 # qwen-image then fails only image.filenkov.store.
+# Start the RAG-Chat stack so external rag_edge and hostname rag-edge
+# exist. As with the image network, the network must exist for the
+# gateway to start; a stopped rag-edge then fails only rag.filenkov.store.
 
 services:
   redis:
@@ -105,6 +108,8 @@ services:
       - llm_network
       # image.filenkov.store upstream http://qwen-image:8000.
       - qwen_image_gen_network
+      # rag.filenkov.store upstream http://rag-edge:8080.
+      - rag_edge
 
 networks:
   auth_network:
@@ -114,4 +119,6 @@ networks:
   llm_network:
     external: true
   qwen_image_gen_network:
+    external: true
+  rag_edge:
     external: true

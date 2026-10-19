@@ -161,13 +161,20 @@ func TestLoadDefaultYAML(t *testing.T) {
 		t.Fatal("messanger.filenkov.store must be enabled")
 	}
 	foundImage := false
+	foundRAG := false
 	for _, n := range names {
 		if n == "image.filenkov.store" {
 			foundImage = true
 		}
+		if n == "rag.filenkov.store" {
+			foundRAG = true
+		}
 	}
 	if !foundImage {
 		t.Fatal("image.filenkov.store must be enabled")
+	}
+	if !foundRAG {
+		t.Fatal("rag.filenkov.store must be enabled")
 	}
 	if got := f.Upstreams["qwen_image"]; got != "http://qwen-image:8000" {
 		t.Fatalf("qwen_image upstream %q", got)
@@ -189,6 +196,9 @@ func TestLoadDefaultYAML(t *testing.T) {
 	}
 	if got := f.Upstreams["qwen38"]; got != "http://qwen38:4001" {
 		t.Fatalf("qwen38 upstream %q", got)
+	}
+	if got := f.Upstreams["rag"]; got != "http://rag-edge:8080" {
+		t.Fatalf("rag upstream %q", got)
 	}
 	r, err := f.Router()
 	if err != nil {
@@ -329,6 +339,24 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if h.proxyTimeout != 30*time.Minute {
 		t.Fatalf("image proxy timeout %v", h.proxyTimeout)
 	}
+	h, rt, ok = r.Match("rag.filenkov.store", "/health")
+	if !ok || rt.auth != PolicyPublic || rt.upstreamName != "rag" || rt.match != "/health" {
+		t.Fatalf("rag health: ok=%v %+v", ok, rt)
+	}
+	h, rt, ok = r.Match("rag.filenkov.store", "/api/me")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "rag" || rt.match != "/*" {
+		t.Fatalf("rag api must fall through to the catch-all: ok=%v %+v", ok, rt)
+	}
+	h, rt, ok = r.Match("rag.filenkov.store", "/")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "rag" || rt.match != "/*" {
+		t.Fatalf("rag catch-all: ok=%v %+v", ok, rt)
+	}
+	if h.roleField != "global_role" {
+		t.Fatalf("rag role_field %q", h.roleField)
+	}
+	if h.proxyTimeout != 5*time.Minute {
+		t.Fatalf("rag proxy timeout %v", h.proxyTimeout)
+	}
 	m := f.AllowedHostsMap()
 	if _, ok := m["image.filenkov.store"]; !ok {
 		t.Fatal("return_to allowlist must include image.filenkov.store")
@@ -341,6 +369,9 @@ func TestLoadDefaultYAML(t *testing.T) {
 	}
 	if _, ok := m["messanger.filenkov.store"]; !ok {
 		t.Fatal("return_to allowlist must include messanger.filenkov.store")
+	}
+	if _, ok := m["rag.filenkov.store"]; !ok {
+		t.Fatal("return_to allowlist must include rag.filenkov.store")
 	}
 }
 

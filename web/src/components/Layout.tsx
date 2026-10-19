@@ -15,8 +15,9 @@ function Mark() {
 }
 
 /**
- * Service links (§7.1). Guests see Messanger / Storage / Hermes with a lock rather
- * than not at all: the gateway redirects an unauthenticated navigation to
+ * Service links (§7.1). Guests see Messanger / Storage / Hermes / RAG with a
+ * lock rather than not at all: the gateway redirects an unauthenticated
+ * navigation to
  * `/auth?return_to=…`, so clicking one is a working sign-in path. Admin and
  * Chat are hidden unless hub `global_role` is ADMIN, because advertising a
  * 403 is noise. Image is shown only for `image` FAMILY or ADMIN, never locked.
@@ -25,6 +26,7 @@ const services = [
   { label: 'Messanger', href: 'https://messanger.filenkov.store' },
   { label: 'Storage', href: 'https://storage.filenkov.store' },
   { label: 'Hermes', href: '/hermes/chat' },
+  { label: 'RAG', href: 'https://rag.filenkov.store' },
 ] as const
 
 export function Layout() {

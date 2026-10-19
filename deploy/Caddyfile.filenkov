@@ -51,6 +51,26 @@ https://image.filenkov.store {
 	}
 }
 
+https://rag.filenkov.store {
+	handle {
+		reverse_proxy localhost:8083
+	}
+	tls {
+		protocols tls1.3
+	}
+
+	@notWebsocket {
+		not header Connection *Upgrade*
+	}
+	header @notWebsocket {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}
+
 https://storage.filenkov.store {
 	handle {
 		reverse_proxy localhost:8083
@@ -129,4 +149,8 @@ http://llm.filenkov.store {
 
 http://image.filenkov.store {
 	redir https://image.filenkov.store{uri}
+}
+
+http://rag.filenkov.store {
+	redir https://rag.filenkov.store{uri}
 }

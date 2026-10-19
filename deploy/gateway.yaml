@@ -27,6 +27,8 @@ upstreams:
   qwen_image: "http://qwen-image:8000"
   # llama.cpp server container `qwen38` on llm_network (one-off; not in this compose).
   qwen38: "http://qwen38:4001"
+  # RAG-Chat edge container `rag-edge` on rag_edge (external; the RAG-Chat stack creates the network).
+  rag: "http://rag-edge:8080"
 
 hosts:
   filenkov.store:
@@ -160,3 +162,18 @@ hosts:
       - match: /*
         upstream: qwen38
         auth: admin
+
+  rag.filenkov.store:
+    role_field: global_role
+    # PDF uploads and chat-to-first-streaming-byte need a response-header timeout.
+    timeouts:
+      proxy: 5m
+    routes:
+      # First match wins, so /health must precede the catch-all.
+      - match: /health
+        upstream: rag
+        auth: public
+      # The catch-all serves the frontend, /api/files and /api/chats.
+      - match: /*
+        upstream: rag
+        auth: session

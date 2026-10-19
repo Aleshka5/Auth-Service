@@ -50,6 +50,7 @@ describe('Layout', () => {
       ['Messanger', 'https://messanger.filenkov.store'],
       ['Storage', 'https://storage.filenkov.store'],
       ['Hermes', '/hermes/chat'],
+      ['RAG', 'https://rag.filenkov.store'],
     ]) {
       const link = screen.getByRole('link', { name: label })
       expect(link).toHaveAttribute('href', href)
@@ -78,6 +79,7 @@ describe('Layout', () => {
     expect(await screen.findByText('Ann')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', '/hermes/chat')
     expect(screen.getByRole('link', { name: 'Messanger' })).not.toHaveAttribute('title')
+    expect(screen.getByRole('link', { name: 'RAG' })).not.toHaveAttribute('title')
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
   })
@@ -92,7 +94,7 @@ describe('Layout', () => {
     expect(link).not.toHaveAttribute('title')
     expect(link.querySelector('.service-lock')).toBeNull()
     expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
-    for (const label of ['Messanger', 'Storage', 'Hermes']) {
+    for (const label of ['Messanger', 'Storage', 'Hermes', 'RAG']) {
       expect(screen.getByRole('link', { name: label })).not.toHaveAttribute('title')
     }
   })
