@@ -61,7 +61,7 @@ JSON-capable (`slog` JSON) including gateway access logs, for Loki later.
 
 ## Frontend (Vite, production static)
 
-The face every host shares — palette, type, header, controls, page states — is [docs/service-design-language.md](docs/service-design-language.md). New services copy those files. The resume tree stays here.
+The face every host shares is the single self-contained file [docs/service-design-language.md](docs/service-design-language.md): palette, type, chrome, controls, the stylesheet, and the header script. Copy that file into an independent service. The resume tree stays here.
 
 1. Auth page (`filenkov.store/auth`) — Google OAuth2.
 2. Hub (`filenkov.store`) — public **resume tree**, not one scrolling page. Every path not claimed by `/auth`, `/admin`, or the legacy `/architecture/:slug` redirect is a tree node served by the SPA catch-all (`path="*"` → `NodeRoute`). Unknown paths and nodes the reader may not see redirect to `/`. Design doc + what shipped: [docs/resume-tree-frontend.md](docs/resume-tree-frontend.md).

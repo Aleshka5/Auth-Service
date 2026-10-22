@@ -1,423 +1,717 @@
-# Service design language
+# Filenkov design language
 
-Status: **extracted** from the shipped hub (`web/`). This is the contract a new Filenkov host follows so it looks like the others.
-Scope: the face of a service — color, type, chrome, controls, page states. Auth, gateway routing, and roles stay in [AGENTS.md](../AGENTS.md) and [docs/auth-gateway.md](auth-gateway.md). The resume tree stays in [docs/resume-tree-frontend.md](resume-tree-frontend.md).
-Audience: whoever builds the next host (storage, messenger, image, chat, or one that does not exist yet).
+This file is the whole visual contract for a Filenkov service. It is written so an independent codebase can implement it without any other file from the Filenkov repository. The stylesheet in the last section is the normative CSS. The markup and the header script above it are the normative HTML and behavior.
 
-There is no shared UI package. The hub is the reference. A new service copies the files named in §12 and keeps the rules below. When a token changes, it changes on the hub first, and the same diff is ported.
+The interface language is English. The color scheme is light. A service ships no dark theme.
 
 ---
 
-## 1. What to save
+## 1. What to build
 
-These are the solutions that make two hosts feel like one product. Save them. Build the service's own screens on top.
+A Filenkov screen is a sheet of warm paper, one column of text at a comfortable measure, hairline rules, and a single copper accent. Corners are square. The page has no drop shadow.
 
-| Save | Where it lives today | What a new service does with it |
-|---|---|---|
-| Paper palette and the two accent inks | `web/src/styles/tokens.css` | Copy the file. Use the tokens. Add a token on the hub before inventing a hex. |
-| Type scale, measure, 4px space, two motion durations | same file | Every size, gap, and duration comes from the scale. |
-| Fraunces + Public Sans, self-hosted, with metric-matched fallbacks | `web/src/styles/fonts.css`, `web/src/styles/base.css`, `web/public/fonts/` | Copy the faces and the `@font-face` rules. Preload the two latin files. |
-| Flat paper, one grain layer, copper selection, focus ring | `web/src/styles/base.css` | Copy the file. |
-| Diamond mark, wordmark, fixed header, service links, sign-in, footer, skip link | `web/src/components/Layout.tsx`, `web/src/styles/shell.css` | Copy the chrome. Point the wordmark at `https://filenkov.store`. Mark the current host in the nav. |
-| Header that condenses and hides on scroll without re-rendering | `web/src/hooks/useScrollChrome.ts` | Copy the header half of the hook on any page that scrolls. |
-| Buttons, fields, banners, tables, empty states | `web/src/styles/forms.css`, `web/src/pages/Auth.tsx`, `web/src/pages/Admin.tsx` | Copy `forms.css`. Compose pages from those classes. |
-| Article vocabulary: kicker, lede, section, chips, figure, callout, metric, timeline, definition list | `web/src/styles/article.css`, `web/src/components/article/index.tsx` | Copy when the service has prose. A tool with no prose can skip this file. |
-| Hairline rows for anything the reader chooses next | `web/src/styles/tree.css` (`.branch-card` only) | Reuse the row, the index number, and the accent bar. Leave the spine behind. |
-| Page states: checking sign-in, delayed skeleton, banner error, empty line | `Auth.tsx`, `Admin.tsx`, `web/src/hooks/useDelayedFlag.ts` | Same sentences, same delay, same colors. |
-| Light scheme, English, one `h1`, skip link, 44px targets | `web/index.html`, `Layout.tsx` | Copy the constraints. |
+Every service draws the same frame:
 
-## 2. What stays on the hub
+- a fixed header with the diamond mark, the wordmark **Filenkov**, the service list, and a sign-in slot
+- a page that opens with a small uppercase kicker, one `h1`, and an optional muted sentence
+- a footer with a hairline on top
+- controls, tables, banners, and choice-rows from the stylesheet
 
-These are the resume, and they are why the hub looks like a magazine. A storage app or a chat host that grows them will stop looking like a tool and start looking like a second resume.
+Build the service's own screens inside that frame. The reading column is `34rem`. A tool (a file list, a directory, a canvas) may run wider than that and still uses the same page padding, the same type scale, and the same header.
 
-| Stays on the hub | Why |
-|---|---|
-| Resume registry, node folders, spine, branch-card *content* | The tree is the hub's information architecture. A service has its own. |
-| The owl, the greeting, the docked back-to-top, the read ring | Mascot of the resume. `shell.css` from the comment `the owl` downward is hub-only. |
-| Owl chat (`web/src/styles/chat.css`) | Rounded corners (5–16px) and the only drop shadows in the product. That treatment belongs to this one panel. A new floating surface uses `.panel` (§7). |
-| `NodeView`, prefetch, sitemap-from-folders | Hub routing. A service has its own routes. |
-| The auth page itself (`/auth`, the Google button) | One sign-in, on the hub. Other hosts send the browser there (§9). |
-| The inline `fontSize: '2.1rem'` on the auth `h1` | A one-off. New pages use `--step-4`. |
+### Leave these out
+
+These belong to the personal site at `filenkov.store` and would make a tool look like a second résumé.
+
+- A résumé tree, a path spine, and article-to-article navigation as the information architecture. A service has its own screens.
+- The owl illustration, the greeting bubble, the docked back-to-top button, and the read-progress ring.
+- Rounded panels and drop shadows. The only shadow in the whole product sits on that owl chat. A floating surface in a service is `.panel`: raised paper, a 1px rule, square corners, no shadow.
+- A second Google button. Sign-in is a link to the hub, specified below.
+- A heading size chosen by hand. The `h1` is `--step-4`.
+
+The browser-tab icon for an independent service is the diamond mark in the favicon section. The hub's own tab is an owl drawing; other services use the diamond so the icon matches the header and this file stays complete.
 
 ---
 
-## 3. Principle
+## 2. Color
 
-A Filenkov screen is a sheet of warm paper with one column of text, hairline rules, and a single copper accent. Boxes, shadows, and extra colors have to earn a place, and almost none have.
+All ratios are WCAG contrast of the first color on the second.
 
-When a layout wants a card, draw a rule. When it wants a second accent, use ink, muted ink, or danger. When it wants a shadow, it is the owl chat, and that file is already written.
-
-The page is light. `web/index.html` sets `color-scheme: light`. A service does not ship a dark theme of its own.
-
-The language is English.
-
----
-
-## 4. Tokens
-
-Copy `web/src/styles/tokens.css` unchanged. The values below are what that file ships. Contrast ratios are WCAG against `--paper`. Two accent tokens exist because `#b85c38` on `#f4efe6` is 4.0:1 and fails AA for text.
-
-| Token | Value | Use |
+| Token | Hex | Use |
 |---|---|---|
 | `--paper` | `#f4efe6` | Page background |
-| `--paper-raised` | `#fffdf8` | The raised surface: figures, the auth panel, tables |
-| `--ink` | `#1a1612` | Body text, primary buttons |
+| `--paper-raised` | `#fffdf8` | Figures, panels, tables |
+| `--ink` | `#1a1612` | Body text and the primary button. 15.7:1 on paper |
 | `--ink-muted` | `#5c5348` | Secondary text. 6.6:1 on paper |
 | `--rule` | `#d9d1c3` | Hairlines, field borders, skeleton bars |
-| `--rule-strong` | `#b9ae9c` | A spine or an active rule, when a hairline is too quiet |
-| `--accent` | `#b85c38` | Marks only: dots, bars, icons, selection, strokes at least 3px. 4.0:1 on paper, so it is never text |
-| `--accent-text` | `#8f4128` | Any copper text or text-sized icon. 6.2:1 on paper |
-| `--chip` | `#e6ddd0` | Chips, table headers, ghost-button hover, neutral banners |
-| `--danger` | `#8c2f24` | Errors, `BLOCKED`, destructive buttons |
+| `--rule-strong` | `#b9ae9c` | A rule that must stay visible when `--rule` is too quiet |
+| `--accent` | `#b85c38` | Dots, bars, selection, strokes of at least 3px. 4.0:1 on paper, so it is never text |
+| `--accent-text` | `#8f4128` | Any copper text or a text-sized icon. 6.2:1 on paper |
+| `--chip` | `#e6ddd0` | Tags, table headers, ghost-button hover, neutral banners. Ink on chip is 13.4:1. Muted ink on chip is 5.6:1 |
+| `--danger` | `#8c2f24` | Errors, the role `BLOCKED`, destructive buttons. 7.2:1 on paper |
+| `--danger-wash` | `#f4e4dc` | Background of an error banner. Danger text on it is 6.7:1 |
 
-| Token | Value | Use |
-|---|---|---|
-| `--serif` | Fraunces, then Fraunces Fallback, Iowan Old Style, Palatino Linotype | Headings, wordmark, big numbers |
-| `--sans` | Public Sans, then Public Sans Fallback, system-ui, Segoe UI | Body, UI, labels |
-| `--step--1` | `0.8125rem` | Meta, nav links, chips, captions, table text nearby |
-| `--step-0` | `1.0625rem` | Body. Also the root `font-size` |
-| `--step-1` | `1.25rem` | Lede, row titles |
-| `--step-2` | `1.5rem` | `h3`, metric values |
-| `--step-3` | `1.9rem` | `h2` |
-| `--step-4` | `clamp(2.2rem, 4.5vw, 3.1rem)` | `h1` |
-| `--measure` | `34rem` | Reading column, about 66 characters at body size |
+Selection is `--accent` behind `--paper` text.
 
-Space is a 4px scale. A margin, padding, or gap in a service stylesheet is one of these:
-
-`--s1` 0.25rem · `--s2` 0.5rem · `--s3` 0.75rem · `--s4` 1rem · `--s5` 1.5rem · `--s6` 2rem · `--s7` 3rem · `--s8` 4.5rem
-
-Motion is two durations and one curve:
-
-| Token | Value |
-|---|---|
-| `--dur-fast` | `140ms` — hover, small fades |
-| `--dur` | `240ms` — header, page entrance |
-| `--ease` | `cubic-bezier(0.2, 0, 0, 1)` |
-
-`prefers-reduced-motion: reduce` sets both durations to `1ms` inside `tokens.css`. Copy that block with the file. Scroll-into-view uses `behavior: 'auto'` under the same media query.
-
-Chrome heights: `--header-h` is `4.5rem` (top of page), `--header-h-c` is `3.5rem` (condensed). The shell's top padding is the expanded height, because the header is fixed.
-
-`--read` is the owl's progress ring. Leave it in the file so the token set stays one copy. A service does not paint the ring.
-
-### 4.1 The one color that is still a raw hex
-
-`.banner.error` uses background `#f4e4dc` (`forms.css`). It is a danger wash, and it is the only raw color outside `tokens.css` that a service should keep. The next time a second host needs it, add `--danger-wash: #f4e4dc` to `tokens.css` on the hub and replace the hex in both places. Until then, copy the rule as written.
+A new color is a new token in `:root`, with a one-line note of what it is for. A raw hex in a component is a bug. The stylesheet below already contains every color a service needs.
 
 ---
 
-## 5. Type
+## 3. Type, space, motion
 
-### 5.1 Faces
+### Faces
 
-Both families are variable fonts, one file per subset, `font-display: swap`, weights 100–900.
+Headings, the wordmark, and big numbers use **Fraunces**. Body, labels, and UI use **Public Sans**. Both are variable fonts, weight axis 100–900, SIL Open Font License. Fraunces is roman only. Public Sans is roman and italic.
 
-| File | Face |
+Serve the files from the service itself. The page makes no request to a font CDN.
+
+| URL path | Face |
 |---|---|
-| `fraunces-latin.woff2` | Fraunces, normal |
-| `fraunces-latin-ext.woff2` | Fraunces, latin-ext (this is where `₽` lives) |
-| `public-sans-latin.woff2` | Public Sans, normal |
-| `public-sans-latin-ext.woff2` | Public Sans, latin-ext |
-| `public-sans-italic-latin.woff2` | Public Sans, italic |
-| `public-sans-italic-latin-ext.woff2` | Public Sans, italic latin-ext |
+| `/fonts/fraunces-latin.woff2` | Fraunces roman, Latin |
+| `/fonts/fraunces-latin-ext.woff2` | Fraunces roman, Latin extended (this is where `₽` U+20BD lives) |
+| `/fonts/public-sans-latin.woff2` | Public Sans roman, Latin |
+| `/fonts/public-sans-latin-ext.woff2` | Public Sans roman, Latin extended |
+| `/fonts/public-sans-italic-latin.woff2` | Public Sans italic, Latin |
+| `/fonts/public-sans-italic-latin-ext.woff2` | Public Sans italic, Latin extended |
 
-`index.html` preloads the two latin files:
+Obtain them from the Fontsource packages `@fontsource-variable/fraunces` and `@fontsource-variable/public-sans`, taking the latin and latin-ext subsets, or subset the upstream variable fonts to the unicode ranges in the stylesheet. `font-display` is `swap`.
+
+The document head preloads the two Latin files:
 
 ```html
 <link rel="preload" as="font" type="font/woff2" href="/fonts/fraunces-latin.woff2" crossorigin />
 <link rel="preload" as="font" type="font/woff2" href="/fonts/public-sans-latin.woff2" crossorigin />
 ```
 
-Fallbacks live at the bottom of `base.css` (`Public Sans Fallback` at `size-adjust: 107%`, `Fraunces Fallback` at `104%`) so the swap does not move the page. Services that can render Cyrillic or `₽` will fetch latin-ext on their own; an English screen does not.
+Metric-matched fallbacks are in the stylesheet (`Public Sans Fallback` at `size-adjust: 107%`, `Fraunces Fallback` at `104%`) so the swap to the real faces does not move the page. An English screen downloads the Latin files. Latin-ext loads when the text needs it.
 
-No request to `fonts.googleapis.com`.
+If subsetting is impractical, one roman Fraunces file and one roman plus one italic Public Sans file are acceptable. Keep the family names `Fraunces` and `Public Sans`, keep `font-display: swap`, and preload the files that cover Latin. Drop the `unicode-range` lines in that case.
 
-### 5.2 Roles
+### Scale
 
-From `base.css` and `article.css`:
+| Token | Value | Role |
+|---|---|---|
+| `--step--1` | `0.8125rem` (13px) | Meta, nav links, tags, captions |
+| `--step-0` | `1.0625rem` (17px) | Body. Also the root font size |
+| `--step-1` | `1.25rem` (20px) | Lede, row titles |
+| `--step-2` | `1.5rem` (24px) | `h3`, metric values |
+| `--step-3` | `1.9rem` | `h2` |
+| `--step-4` | `clamp(2.2rem, 4.5vw, 3.1rem)` | `h1` |
+| `--measure` | `34rem` | Reading column, about 66 characters at body size |
+
+Body is Public Sans, `--step-0`, line-height `1.65`, letter-spacing `0.01em`, antialiased.
+
+`h1`, `h2`, and `h3` are Fraunces, weight `650`, letter-spacing `-0.03em`, line-height `1.15`, margin `0`.
 
 | Role | Spec |
 |---|---|
-| Body | Sans, `--step-0`, line-height `1.65`, letter-spacing `0.01em`, antialiased |
-| `h1`–`h3` | Serif, weight `650`, letter-spacing `-0.03em`, line-height `1.15`, margin `0` |
-| Wordmark | Serif, `--step-1`, weight `650`, letter-spacing `-0.02em` |
-| Kicker | `0.72rem`, weight `600`, letter-spacing `0.18em`, uppercase, `--accent-text`, margin `0 0 var(--s3)` |
+| Wordmark | Fraunces, `--step-1`, weight `650`, letter-spacing `-0.02em` |
+| Kicker | `0.72rem`, weight `600`, letter-spacing `0.18em`, uppercase, `--accent-text` |
 | Meta line | `--ink-muted`, `--step--1`, letter-spacing `0.04em` |
-| Lede | `--step-1`, line-height `1.5`, margin `0 0 var(--s5)` |
+| Lede | `--step-1`, line-height `1.5` |
 | Prose link | `--accent-text`, underline 1px, offset 2px |
-| Nav link | No underline. `--ink-muted`, weight `600`, `--step--1`. Hover `--accent-text` |
-| Big number | Serif, `--step-2`, tabular figures, `--accent-text` |
+| Nav link | No underline. `--ink-muted`, weight `600`, `--step--1`. Hover turns `--accent-text` |
+| Big number | Fraunces, `--step-2`, tabular figures, `--accent-text` |
+| Field label and table header | `0.72rem`, weight `600`, letter-spacing `0.12em`, uppercase, `--ink-muted` |
 
-`.kicker` sits above the `h1` and names the place: `Sign in`, `Admin`, `Resume`, or the service's section. One `h1` per view. The `h1` is the page title in the type scale, which is `--step-4`.
+### Space
 
-### 5.3 Column
+A 4px scale. Every margin, padding, and gap is one of these.
 
-Reading text sits in `--measure` (`34rem`), centered in the page. A directory, a file list, or a canvas may run wider than that — the admin table does — and it still uses `.main` padding. The kicker and `h1` stay at the type scale even when the tool below them is wide.
-
----
-
-## 6. Surfaces, shape, depth
-
-| Surface | Treatment |
+| Token | Value |
 |---|---|
-| Page | `--paper`. No gradient, no ruled lines. |
-| Grain | One `body::before`: fixed, `inset: 0`, `pointer-events: none`, `z-index: 0`, opacity `0.025`, the fractal-noise SVG already in `base.css`. It does not repaint on scroll. `.shell` is `z-index: 1` so content sits above it. |
-| Text | Directly on the paper. |
-| Raised | `--paper-raised` plus `1px solid var(--rule)`. Used for `.panel`, `.a-figure`, `.table-wrap`. |
-| Hairline list | Rows separated by `border-top: 1px solid var(--rule)`, last row also bordered. No fill. |
-| Chips | `--chip` fill, `1px solid var(--rule)`, `--step--1`, padding `0.1rem 0.5rem`. |
+| `--s1` | `0.25rem` |
+| `--s2` | `0.5rem` |
+| `--s3` | `0.75rem` |
+| `--s4` | `1rem` |
+| `--s5` | `1.5rem` |
+| `--s6` | `2rem` |
+| `--s7` | `3rem` |
+| `--s8` | `4.5rem` |
 
-Corners are square. The focus ring uses `border-radius: 1px` so the outline does not look bitten. Circles exist for the diamond's dot and, on the hub, the owl. Rounded rectangles of 5px, 10px, 14px, and 16px exist only in `chat.css`.
+### Motion
 
-Shadows exist only on the owl bubble and the owl chat panel. A new service stylesheet has no `box-shadow`.
+Two durations and one curve.
 
-Selection is `--accent` with `--paper` text.
-
----
-
-## 7. Controls
-
-Copy `web/src/styles/forms.css`. The class names are the API.
-
-### 7.1 Buttons
-
-`.btn` is an inline-flex control, square, `min-height: 2.75rem`, padding `0.7rem 1.1rem`, weight `600`. Fill and border are `--ink`, label is `--paper`. Hover turns both fill and border to `--accent-text`. Transition is `background` over `--dur-fast`.
-
-| Class | Look |
-|---|---|
-| `.btn` | Ink fill. The one primary action: Sign in, Continue with Google, an outbound action. |
-| `.btn-ghost` | Transparent, ink label. Hover fills `--chip`. Sign out. |
-| `.btn-danger` | Transparent, `--danger` label and border. Hover fills `--danger` with a `--paper` label. |
-| `.btn-small` | `min-height: 2.25rem`, padding `--s2 --s3`, `--step--1`. Header controls. |
-
-A button and a link that does the same job share `.btn`. Disabled controls are `opacity: 0.55` with `cursor: not-allowed`.
-
-### 7.2 Fields
-
-`input`, `select`, and `button` inherit the body font (`base.css`).
-
-Text fields and selects: background `--paper`, border `1px solid var(--rule)`, color `--ink`, square. Search padding is `--s2 --s3`. Selects add `--s1 --s2` and `min-width: 7.5rem`.
-
-The label above a field matches a table header: `0.72rem`, weight `600`, letter-spacing `0.12em`, uppercase, `--ink-muted`.
-
-### 7.3 Banners, tables, empty
-
-| Class | Look |
-|---|---|
-| `.banner` | `--chip` fill, `1px solid var(--rule)`, padding `--s3 --s4`, margin below `--s4` |
-| `.banner.error` | `--danger` border and text, wash `#f4e4dc` |
-| `.table-wrap` | Raised surface, horizontal scroll |
-| `th` | Uppercase label style on `--chip` |
-| `td` | `--s3` padding, hairline below, `white-space: nowrap`, last row has none |
-| `.empty` | Centered, `--ink-muted`, padding `--s6 --s4` |
-| `.status-blocked` | `--danger`, weight `600`. A `select` with the class also takes a danger border |
-
-`.panel` is the auth card: raised, padding `--s6`, `max-width: 28rem`. `.stack` is a column with `--s4` gaps. A dialog or a short form uses `.panel`, which has no shadow and no radius. That is the floating surface a service is allowed to add.
-
-### 7.4 Choosing rows
-
-When the reader picks a next place — a folder, a thread, a document — use a hairline row, the way `.branch-card` does:
-
-- The whole row is one link. Minimum height `4.5rem`. Padding `--s4 --s2 --s4 --s3`.
-- Grid: a serif tabular index in `--accent-text` at `--step--1`, then the title at `--step-1` weight `600`, then a muted teaser at `--step--1` line-height `1.45`, then optional meta.
-- A `2px` `--accent` bar on the left, `scaleY(0)` to `scaleY(1)` from the top over `--dur-fast`, on hover and on `:focus-visible`.
-- The title turns `--accent-text` on that same hover.
-
-At `760px` the meta wraps under the title. The row stays one link.
-
----
-
-## 8. Chrome
-
-Every host renders the same shell. Copy `shell.css` through `.footer` and both media queries. Stop before the comment `the owl`.
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  ◆ Filenkov     Messanger · Storage · …          [ Sign in ] │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│   KICKER                                                     │
-│   Page title                                                 │
-│   One muted sentence about the page.                         │
-│                                                              │
-│   (the service)                                              │
-│                                                              │
-├──────────────────────────────────────────────────────────────┤
-│  Filenkov · Storage          Google sign-in · httpOnly …    │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### 8.1 Landmarks
-
-Order inside `.shell`:
-
-1. Skip link, first focusable element. Label "Skip to content". Target is the `<main>` id. Visible only on `:focus-visible`: ink fill, paper text, weight `600`, translated in from above.
-2. `<header class="header">`.
-3. `<main class="main" id="main">`.
-4. `<footer class="footer">`.
-
-`.shell` is a column, `min-height: 100svh`, `padding-top: var(--header-h)`. `.main` is `flex: 1`, padding `--s5 --s5 --s8`. The footer is a hairline (`border-top: 1px solid var(--rule)`), `--ink-muted`, `--step--1`, space-between, wrapping. Left side: `Filenkov · <service name>`. Right side: `Google sign-in · httpOnly cookies on .filenkov.store`.
-
-### 8.2 Brand
-
-The header mark is a 26px diamond with a copper dot. The favicon (`web/public/favicon.svg`) is the owl; that stays the tab icon on every host. The header does not use the owl.
-
-```svg
-<svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-  <path d="M16 3 L29 16 L16 29 L3 16 Z" fill="none" stroke="currentColor" stroke-width="1.75" />
-  <circle cx="16" cy="16" r="3.2" fill="var(--accent)" />
-</svg>
-```
-
-The wordmark is the text `Filenkov`. The link goes to `https://filenkov.store` (on the hub itself it is an in-app link to `/`). Color `--ink`, no underline, gap `--s3` between mark and word.
-
-### 8.3 Service links
-
-`<nav class="service-nav" aria-label="Primary">`. Same set, same order, same show/hide rules as `Layout.tsx`:
-
-| Link | Shown | Guest |
+| Token | Value | Use |
 |---|---|---|
-| Messanger → `https://messanger.filenkov.store` | Always | Visible, with a lock, `title="Sign in required"` |
-| Storage → `https://storage.filenkov.store` | Always | Same lock |
-| Hermes → `https://filenkov.store/hermes/chat` | Always | Same lock |
-| Image → `https://image.filenkov.store` | Only when the `image` service role is `FAMILY` or `ADMIN` | Hidden. Never locked |
-| Chat → `https://llm.filenkov.store` | Only when hub `global_role` is `ADMIN` | Hidden. Never locked |
-| Admin → `https://filenkov.store/admin` | Only when hub `global_role` is `ADMIN` | Hidden |
+| `--dur-fast` | `140ms` | Hover, small fades |
+| `--dur` | `240ms` | Header, a view entering |
+| `--ease` | `cubic-bezier(0.2, 0, 0, 1)` | Both |
 
-The lock is the character `🔒` in `.service-lock` (`0.7em`, `margin-left: 0.25em`, `aria-hidden`). Guests can click Messanger, Storage, and Hermes; the gateway sends them through sign-in and back. Image, Chat, and Admin stay hidden unless the role check passes, because a link that 403s is noise.
+`prefers-reduced-motion: reduce` sets both durations to `1ms`. A view entrance animation is disabled under that query. `scrollTo` uses `behavior: 'auto'` under the same query.
 
-The hub reads those roles from `GET /api/me` (`global_role` and `services[]`). A product host only receives `X-Auth-Role`, which is the hub `global_role`, so Chat and Admin can follow that header. The `image` role is not in it. A product header shows Image when its own backend can supply that role, and omits Image otherwise.
-
-On a service host, that host's own link is the current item: color `--ink`, weight `650`, `aria-current="page"`, and it is not a link to itself.
-
-### 8.4 Sign-in slot
-
-Right side, `margin-left: auto`.
-
-| State | What the header shows |
+| What moves | How |
 |---|---|
-| Session unknown | `<span class="muted">Checking sign-in…</span>` |
-| Guest | `<a class="btn btn-small" href="https://filenkov.store/auth?return_to=<absolute current URL>">Sign in</a>` |
-| Signed in | `<span class="user-name">{username}</span>` and a ghost `.btn-small` labelled `Sign out` |
+| A view entering | Opacity `0 → 1` and `translateY(8px → 0)` over `--dur`. Never translate on the X axis |
+| Header show and hide | `transform: translateY` and height, over `--dur` |
+| Wordmark and service list fading in the condensed header | Opacity over `--dur-fast` |
+| A choice row | A 2px copper bar on the left, `scaleY(0 → 1)` from the top, over `--dur-fast` |
+| A button | Background color over `--dur-fast` |
+| Anything else | Still |
 
-The name in the header is `username`. Email stays in directories and account detail.
+---
 
-Where that name comes from, and what Sign out posts to, is §9. The hub plays an owl departure before logout. A service disables the button while the request is in flight and skips the owl.
+## 4. Document
 
-### 8.5 Header motion
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Files · Storage · Filenkov</title>
+    <meta name="description" content="One sentence about this service." />
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/fraunces-latin.woff2" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/public-sans-latin.woff2" crossorigin />
+    <link rel="stylesheet" href="/filenkov.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <a class="skip-link" href="#main">Skip to content</a>
+      <header class="header">
+        <!-- brand, service list, sign-in slot: sections 5 and 6 -->
+      </header>
+      <main class="main" id="main">
+        <!-- the service -->
+      </main>
+      <footer class="footer">
+        <span>Filenkov · Storage</span>
+        <span>Google sign-in · httpOnly cookies on .filenkov.store</span>
+      </footer>
+    </div>
+    <script src="/header.js"></script>
+  </body>
+</html>
+```
 
-The header is `position: fixed`, `z-index: 20`, height `--header-h`, horizontal padding `--s5`, gap `--s5`. `html[data-header]` has three values, written by a scroll listener that never calls `setState`:
+The title form is `<view> · <service> · Filenkov`. Replace `Storage` in the footer with the service name.
+
+Landmarks, in order: skip link, `header`, `main`, `footer`. The skip link is the first focusable control. It is hidden above the viewport and slides into place on `:focus-visible`. One `h1` per view. When a view change replaces the `h1`, move focus to that heading (`tabindex="-1"`) and write the title into a visually hidden live region:
+
+```html
+<p class="sr-only" aria-live="polite"></p>
+```
+
+The first load of a document does not steal focus.
+
+The page background is `--paper`. One grain layer sits on `body::before`: fixed, covering the viewport, `pointer-events: none`, `z-index: 0`, opacity `0.025`. It does not repaint on scroll. `.shell` is `z-index: 1`.
+
+Z-index: grain `0`, shell `1`, header `20`, skip link `30`.
+
+---
+
+## 5. Header
+
+The header is fixed to the top, height `--header-h` (`4.5rem`). `.shell` pads the top by that same amount so content starts below it. Horizontal padding is `--s5`. The items are a row with gap `--s5`, vertically centered.
+
+```html
+<header class="header">
+  <a class="brand" href="https://filenkov.store">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M16 3 L29 16 L16 29 L3 16 Z" fill="none" stroke="currentColor" stroke-width="1.75" />
+      <circle cx="16" cy="16" r="3.2" fill="var(--accent)" />
+    </svg>
+    <span class="brand-name">Filenkov</span>
+  </a>
+  <nav class="service-nav" aria-label="Primary">
+    <!-- section 5.1 -->
+  </nav>
+  <div class="header-right">
+    <!-- section 6 -->
+  </div>
+</header>
+```
+
+The mark is 26×26. The diamond stroke uses `currentColor` (ink). The dot is `--accent`. The wordmark links to `https://filenkov.store`.
+
+### 5.1 Service list
+
+Same labels, same order, on every host. The current host is a `<span aria-current="page">`, colored `--ink` at weight `650`, and is not a link.
+
+| Label | Href | Who sees it |
+|---|---|---|
+| Messanger | `https://messanger.filenkov.store` | Everyone. Guests also see a lock |
+| Storage | `https://storage.filenkov.store` | Everyone. Guests also see a lock |
+| Hermes | `https://filenkov.store/hermes/chat` | Everyone. Guests also see a lock |
+| Image | `https://image.filenkov.store` | Only when the person's **image** service role is `FAMILY` or `ADMIN`. Hidden otherwise. Never locked |
+| Chat | `https://llm.filenkov.store` | Only when the hub role `global_role` is `ADMIN`. Hidden otherwise. Never locked |
+| Admin | `https://filenkov.store/admin` | Only when `global_role` is `ADMIN`. Hidden otherwise |
+
+The spelling **Messanger** is the real host name.
+
+A guest lock is the character `🔒` inside `<span class="service-lock" aria-hidden="true">`, and the anchor has `title="Sign in required"`. Guests may click Messanger, Storage, and Hermes. The gateway sends them through sign-in and back. Image, Chat, and Admin stay hidden unless the role check passes. A link that would answer 403 is noise.
+
+`global_role` arrives on the service's backend as the request header `X-Auth-Role`. That is enough to show or hide Chat and Admin. The image role is a different fact and is not in `X-Auth-Role`. Show Image only when the service's own backend knows that role. When it does not, omit Image.
+
+```html
+<nav class="service-nav" aria-label="Primary">
+  <a href="https://messanger.filenkov.store">Messanger</a>
+  <span aria-current="page">Storage</span>
+  <a href="https://filenkov.store/hermes/chat">Hermes</a>
+  <!-- Image, Chat, Admin appended only when the role check passes -->
+</nav>
+```
+
+Guest version of a locked link:
+
+```html
+<a href="https://messanger.filenkov.store" title="Sign in required">
+  Messanger<span class="service-lock" aria-hidden="true">🔒</span>
+</a>
+```
+
+### 5.2 Three header states
+
+The scroll script writes `data-header` on `<html>`. It never re-renders the page to do it.
 
 | `data-header` | When | Look |
 |---|---|---|
-| `top` | Scroll under 8px | Full height, transparent, wordmark and service links visible |
-| `hidden` | Scrolling down, past 96px, and the header does not contain focus | `translateY(-100%)` |
-| `condensed` | Scrolling up, or focus is inside the header | Height `--header-h-c`, background `color-mix(in srgb, var(--paper) 82%, transparent)`, `backdrop-filter: blur(8px)`, `1px` bottom rule. Wordmark and service nav fade (`opacity: 0`, `pointer-events: none`). Mark and sign-in stay |
+| `top` | Scroll position under 8px | Full height, transparent, wordmark and service list visible |
+| `hidden` | The reader has scrolled down, past 96px, and focus is outside the header | The header is `translateY(-100%)` |
+| `condensed` | The reader has scrolled up, or focus is inside the header | Height `--header-h-c` (`3.5rem`). Background is paper at 82% mixed with transparent, `backdrop-filter: blur(8px)`, a 1px bottom rule. Wordmark and service list fade to opacity 0 and ignore hits. The mark and the sign-in slot stay |
 
-Constants from `useScrollChrome.ts`, copied with the header:
+Constants:
 
 | Name | Value | Meaning |
 |---|---|---|
-| `JITTER_FLOOR` | 6px | Smaller frame-to-frame deltas are trackpad noise |
-| `TRAVEL_THRESHOLD` | 24px | Accumulated travel in one direction before the state flips |
-| `TOP_AT` | 8px | Below this the header is always `top` |
-| `HIDE_BELOW` | 96px | The header does not hide above this |
+| `JITTER_FLOOR` | 6px | A smaller frame-to-frame delta is trackpad noise |
+| `TRAVEL_THRESHOLD` | 24px | Travel accumulated in one direction before the state flips |
+| `TOP_AT` | 8px | Below this the header is `top` |
+| `HIDE_BELOW` | 96px | The header stays visible above this |
 
-`last` advances only after a frame clears the jitter floor, so a slow drift still adds up. A keyboard user tabbing inside the header forces `condensed`; the bar is translated off-screen and remains focusable, so `display: none` and `inert` are the wrong tools. Transition is `transform` and `height` over `--dur` / `--ease`, which is what `shell.css` ships. Wordmark and nav fade over `--dur-fast`.
+The previous sample advances only after a frame clears the jitter floor, so a slow drift still adds up. A negative `scrollY` (rubber-banding) is clamped to 0.
 
-A page that does not scroll can leave `data-header` at `top`.
+Focus inside the header forces `condensed`. The hidden header is translated off-screen and remains focusable, so a keyboard user tabbing into it brings it back. `display: none` and `inert` are the wrong tools for this.
 
-### 8.6 Breakpoints
+A page that does not scroll may leave `data-header` unset. The unset header is the `top` look.
+
+Save this as `/header.js`:
+
+```html
+<script>
+  (function () {
+    var JITTER_FLOOR = 6
+    var TRAVEL_THRESHOLD = 24
+    var TOP_AT = 8
+    var HIDE_BELOW = 96
+    var root = document.documentElement
+    root.dataset.header = 'top'
+
+    var last = Math.max(0, window.scrollY)
+    var acc = 0
+    var frame = 0
+
+    function headerHasFocus() {
+      var active = document.activeElement
+      if (!active) return false
+      var header = document.querySelector('.header')
+      return header !== null && header.contains(active)
+    }
+
+    function apply() {
+      frame = 0
+      var y = Math.max(0, window.scrollY)
+
+      if (y < TOP_AT) {
+        root.dataset.header = 'top'
+        last = y
+        acc = 0
+        return
+      }
+      if (headerHasFocus()) {
+        root.dataset.header = 'condensed'
+        last = y
+        acc = 0
+        return
+      }
+
+      var d = y - last
+      if (Math.abs(d) < JITTER_FLOOR) return
+      acc = Math.sign(d) === Math.sign(acc) ? acc + d : d
+      last = y
+
+      if (acc > TRAVEL_THRESHOLD && y > HIDE_BELOW) root.dataset.header = 'hidden'
+      else if (acc < -TRAVEL_THRESHOLD) root.dataset.header = 'condensed'
+    }
+
+    window.addEventListener(
+      'scroll',
+      function () {
+        if (frame === 0) frame = window.requestAnimationFrame(apply)
+      },
+      { passive: true },
+    )
+  })()
+</script>
+```
+
+### 5.3 Breakpoints
 
 | Width | Change |
 |---|---|
-| `760px` | `.main` and header padding shrink to `--s4`. Header gap becomes `--s4`. A choosing-row's meta wraps under the title. |
-| `620px` | The wordmark hides. The mark still names the product. Service links keep `--s3` gaps and scroll on X with the scrollbar hidden. |
-
-`1080px` is the hub's spine breakpoint. A service with a side column uses it the same way: drop the side column before stacking the page.
-
----
-
-## 9. Sign-in, from the service's side
-
-The Google button lives on `filenkov.store/auth`. A service paints no second one.
-
-Cookies are `auth_access` and `auth_refresh`, httpOnly, `SameSite=Lax`, on `.filenkov.store`. The Auth API is same-origin behind the gateway and has no CORS (`README.md`). `GET /api/me`, `POST /api/refresh`, and `POST /api/logout` are routed on `filenkov.store` only (`deploy/gateway.yaml`). A page on `storage.filenkov.store` or any other product host cannot `fetch` them.
-
-What a product host can do today:
-
-- **Sign in** is a top-level navigation to `https://filenkov.store/auth?return_to=<current absolute URL>`. `return_to` must be `https` on a host listed in `deploy/gateway.yaml`. `continueTarget` in `web/src/pages/Auth.tsx` is that allowlist. The gateway already refreshes an expired access cookie before it proxies, so the product UI never calls `/api/refresh` itself.
-- **Who is signed in** arrives as gateway headers on the product's own backend: `X-Auth-Name` (username), `X-Auth-Email`, `X-Auth-User-Id`, `X-Auth-Role` (hub `global_role`). The product's same-origin API returns the username to its page. The header slot in §8.4 renders that username.
-- **Sign out** has no product-host route yet. `POST /api/logout` exists on the hub, and a cross-origin `fetch` will not clear the cookies. Until a host grows a same-origin logout that proxies to the Auth API (still no CORS on the Auth API), Sign out navigates to `https://filenkov.store`. The hub header there is the button that posts `/api/logout`. Opening the hub does not sign the reader out on its own. A same-origin logout is a gateway change for that host's user story. It is not a new color and not a second session.
-
-Roles rendered anywhere use the exact strings `ADMIN`, `FAMILY`, `STRANGER`, `BLOCKED`. `BLOCKED` is `.status-blocked`.
-
-Hub `global_role` and a service role are different facts. Image is shown from the `image` role. Chat and Admin are shown from `global_role`. A service paints its own authorization from the role the gateway already enforced, and it keeps the same four words.
+| `1080px` and below | A side column, if the screen has one, drops before the page stacks |
+| `760px` and below | Main and header padding become `--s4`. Header gap becomes `--s4`. On a choice row, the meta wraps under the title |
+| `620px` and below | The wordmark hides. The diamond still names the product. The service list gap becomes `--s3`, and the list scrolls horizontally with the scrollbar hidden |
 
 ---
 
-## 10. Page anatomy
+## 6. Sign-in slot
 
-### 10.1 Head
+The slot is the right side of the header (`margin-left: auto`).
 
-Every view opens the same way the admin page does:
+| State | Markup |
+|---|---|
+| Session unknown | `<span class="muted">Checking sign-in…</span>` |
+| Guest | `<a class="btn btn-small" href="SIGN_IN">Sign in</a>` |
+| Signed in | `<span class="user-name">USERNAME</span>` and `<button type="button" class="btn btn-ghost btn-small">Sign out</button>` |
 
-```html
-<p class="kicker">Storage</p>
-<h1>Files</h1>
-<p class="muted">One sentence. What this screen is for.</p>
+`USERNAME` is the person's username. Email stays out of the header.
+
+`SIGN_IN` is:
+
+```text
+https://filenkov.store/auth?return_to=<current page, absolute URL, percent-encoded>
 ```
 
-The kicker is the service or the section. The `h1` is the view. The muted line is optional and uses the admin lead's spacing when it sits tight under a title: a small negative top margin is already `.admin-lead` (`margin: calc(var(--s2) * -1) 0 var(--s5)`). A service may reuse that class.
+`return_to` is an `https` URL whose host is `filenkov.store` or a subdomain of it (`storage.filenkov.store`, `messanger.filenkov.store`, `image.filenkov.store`, `llm.filenkov.store`, and any later `*.filenkov.store` host). The hub rejects anything else.
 
-### 10.2 Prose
+### Session facts
 
-When a screen explains something, compose it from `web/src/components/article/index.tsx` and plain `p` / `ul` / `ol`:
+The credentials are two httpOnly cookies, `auth_access` and `auth_refresh`, on the domain `.filenkov.store`, `SameSite=Lax`, `Secure` in production. The page never reads the tokens. A service stores nothing in `localStorage` and sends no `Authorization` header of its own.
 
-| Piece | Class | What it is |
+There is also an httpOnly cookie `auth_session`. It is an opaque id for product vaults. It is not the sign-in credential, and a missing `auth_session` still leaves the person signed in.
+
+The Auth API is same-origin on the hub and sends no CORS headers. These routes exist on `https://filenkov.store` only:
+
+| Method | Path | What it does |
 |---|---|---|
-| `Section` | `.a-section` | The only `h2`. Top rule, margin `--s7`, padding-top `--s5`. Its `h2` is `--step-2`. |
-| `Chips` | `.a-chips` | A wrap of tags. Empty input renders nothing. |
-| `Figure` | `.a-figure` | The raised surface. Image is `max-width: 100%`, lazy, async. `scroll` lets a wide figure scroll inside, with `min-width: 34rem`. Caption is muted `--step--1`. |
-| `Callout` | `.a-callout` | `2px` left `--accent` rule, padding-left `--s4`. Optional title at weight `650`. |
-| `Metrics` / `Metric` | `.a-metrics`, `.a-metric` | Hairline rows. Value in serif copper, then label, then a muted "how" line. The third line is the point of the component. |
-| `Timeline` | `.a-timeline` | Left hairline. When-line is uppercase `--accent-text` at `--step--1`, tracking `0.08em`. |
-| `DefinitionList` | `.a-deflist` | Term at weight `650`, detail muted, hairline under each pair. |
+| `GET` | `/oauth/google?return_to=` | Starts Google sign-in. The hub auth page calls this. A service does not |
+| `POST` | `/api/refresh` | Rotates the refresh cookie. The gateway does this before it proxies a request with an expired access cookie. The service UI does not call it |
+| `POST` | `/api/logout` | Revokes the session and clears the cookies. Returns `200` and `{ "status": "ok" }` |
+| `GET` | `/api/me` | Returns the signed-in person to the hub. A service does not call it |
 
-Body copy inside `.node-body` (or the same rules, renamed) has paragraphs at margin `0 0 var(--s4)`, lists padded `--s5`, and `--s2` between items.
+A page on `storage.filenkov.store` (or any other product host) cannot `fetch` those URLs. The browser will block it.
 
-### 10.3 States
+What the service can do:
+
+- **Who is signed in.** The gateway injects these headers on the request to the service's backend, and strips any incoming header of the same name so the browser cannot forge them:
+  - `X-Auth-User-Id` — the person's UUID
+  - `X-Auth-Email`
+  - `X-Auth-Name` — the username, which is the header text
+  - `X-Auth-Role` — hub `global_role`
+- The service's own same-origin API reads those headers and returns the username to its page. That response fills the sign-in slot.
+- **Sign in** is a top-level navigation to the `SIGN_IN` URL above. The service draws no Google logo and no password form.
+- **Sign out.** There is no logout route on a product host today. `POST /api/logout` lives on the hub, and a cross-origin `fetch` will not clear the cookies. The Sign out control navigates to `https://filenkov.store`. The header there has the button that posts logout. Opening the hub does not sign the person out by itself. A real same-origin logout is a later gateway route on that host. It is not a new color, and it is not a second session. While a logout request is in flight, the button is disabled (`opacity: 0.55`).
+
+Roles, wherever they are shown, use these exact strings: `ADMIN`, `FAMILY`, `STRANGER`, `BLOCKED`. `BLOCKED` gets the class `status-blocked` (danger color, weight 600). A `<select>` with that class also takes a danger border.
+
+`global_role` and a per-service role are different. Chat and Admin follow `global_role`. Image follows the image service role. A service shows its own permission with the same four words.
+
+---
+
+## 7. Page head
+
+Every view opens the same way:
+
+```html
+<div class="page-head">
+  <div>
+    <p class="kicker">Storage</p>
+    <h1>Files</h1>
+  </div>
+</div>
+<p class="muted page-lead">One sentence. What this screen is for.</p>
+```
+
+The kicker names the service or the section. The `h1` names the view. The lead is optional.
+
+A short form or a dialog sits in `.panel` (max-width `28rem`, padding `--s6`, raised paper, 1px rule). `.stack` is a column with `--s4` between children. `.auth-page` centers that panel horizontally on a gate screen. A service uses it for its own short gate, and the Google button stays on the hub.
+
+---
+
+## 8. Controls
+
+### Buttons
+
+`.btn` is inline-flex, square, `min-height: 2.75rem` (44px), padding `0.7rem 1.1rem`, weight `600`. Fill and border are `--ink`. The label is `--paper`. Hover turns fill and border to `--accent-text`.
+
+| Class | Look | Typical label |
+|---|---|---|
+| `btn` | Ink fill | The one primary action |
+| `btn btn-ghost` | Transparent, ink label. Hover fills `--chip` | Sign out, a secondary action |
+| `btn btn-danger` | Transparent, danger label and border. Hover fills danger with a paper label | A destructive action |
+| `btn btn-small` | `min-height: 2.25rem`, padding `--s2 --s3`, size `--step--1` | Header controls only |
+
+A link that does the same job as a button uses `<a class="btn">`. Disabled buttons and selects are `opacity: 0.55` with `cursor: not-allowed`.
+
+Primary actions use `.btn`. `.btn-small` is the header exception.
+
+### Fields
+
+`input`, `select`, `textarea`, and `button` inherit the body font.
+
+```html
+<div class="field">
+  <label for="album-name">Name</label>
+  <input id="album-name" name="album-name" type="text" />
+</div>
+```
+
+A horizontal filter:
+
+```html
+<div class="filters">
+  <label for="user-email">Email</label>
+  <input id="user-email" name="user-email" type="search" autocomplete="off" spellcheck="false" placeholder="Filter by email" />
+</div>
+```
+
+Fields are square. Background `--paper`, border `1px solid var(--rule)`, text `--ink`. Selects have `min-width: 7.5rem` and slightly tighter padding.
+
+### Banners, tables, empty
+
+```html
+<div class="banner">A neutral notice.</div>
+<div class="banner error">Could not save the change.</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Username</th><th>Email</th><th>Role</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>ada</td>
+        <td>ada@example.com</td>
+        <td class="status-blocked">BLOCKED</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p class="empty">No one matches that email.</p>
+```
+
+The table wraps in a raised surface and scrolls horizontally. Header cells use the uppercase label style on `--chip`. Body cells are nowrap, with a hairline under each row except the last. An empty table, an empty list, and a loading list all use `.empty`, centered, muted, padding `--s6 --s4`.
+
+### States
 
 | State | UI |
 |---|---|
-| Session loading | The sentence `Checking sign-in…` in `.muted`. Nothing else shifts. |
-| List loading | `.empty` with a specific sentence (`Loading directory…`). |
-| Fast load | `useDelayedFlag` waits 120ms before a skeleton is allowed to paint. A response that is already here never flashes a skeleton. |
-| Skeleton | Bars of `--rule` at opacity `0.55`, height `0.75rem`, gap `--s3`. |
-| Empty | `.empty` with a specific sentence (`No one matches that email.`). |
-| Failed action | `.banner.error` with the error text. The rest of the page stays. |
-| Failed view | A `2px` left `--danger` rule and `--danger` text, as `.node-error`. Offer one recovery control. |
-| Destructive role | `.status-blocked` on the text or the select. |
+| Session loading | The sentence `Checking sign-in…` in `.muted`. The rest of the header does not jump |
+| List loading | `.empty` with a specific sentence, such as `Loading files…` |
+| Fast response | A skeleton is allowed to paint only after the load has already lasted 120ms. A response that is already here never flashes one |
+| Skeleton | Three or more bars, height `0.75rem`, color `--rule` at opacity `0.55`, gap `--s3` |
+| Empty | `.empty` with a sentence about that screen |
+| Failed action | `.banner.error` with the error text. The rest of the page stays |
+| Failed view | `.error-block`: a 2px danger rule on the left, danger text, and one recovery control |
+| Blocked role | `.status-blocked` |
+
+```html
+<div class="skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
+
+<div class="error-block">
+  <p>Could not load files.</p>
+  <button type="button" class="btn">Reload</button>
+</div>
+```
+
+The 120ms gate. `setActive(true)` when the load starts, `setActive(false)` when it finishes. `onChange(true)` means the skeleton may paint. A load that finishes inside 120ms never calls `onChange(true)`.
+
+```javascript
+function delayedFlag(onChange, delayMs) {
+  var delay = delayMs == null ? 120 : delayMs
+  var timer = 0
+  var shown = false
+  return function setActive(active) {
+    window.clearTimeout(timer)
+    timer = 0
+    if (!active) {
+      if (shown) onChange(false)
+      shown = false
+      return
+    }
+    if (shown) return
+    timer = window.setTimeout(function () {
+      shown = true
+      onChange(true)
+    }, delay)
+  }
+}
+```
 
 Loading copy names the thing that is loading. A spinner is not part of the language.
 
-### 10.4 Document head
+---
 
-`lang="en"`. `color-scheme: light`. Viewport `width=device-width, initial-scale=1`. One title of the form `<view> · <service> · Filenkov`. A description meta tag. The favicon is `/favicon.svg`.
+## 9. Prose
+
+Reading text sits in a column of `--measure`, centered:
+
+```html
+<article class="prose">
+  <p class="lede">The first sentence, one step larger than body.</p>
+  <p>Body text. A <a href="/folders/photos">prose link</a> is copper and underlined.</p>
+</article>
+```
+
+Compose longer text from the blocks below. Plain `p`, `ul`, and `ol` are the rest of the vocabulary.
+
+### Section
+
+The only `h2` on the page. A hairline above it.
+
+```html
+<section class="a-section">
+  <h2>Sharing</h2>
+  <p>Who can open this folder.</p>
+  <h3>Links</h3>
+  <p>A link expires after seven days.</p>
+</section>
+```
+
+Inside a section the `h2` is `--step-2` and an `h3` is `--step-1`.
+
+### Tags
+
+```html
+<ul class="a-chips">
+  <li>PDF</li>
+  <li>Family</li>
+</ul>
+```
+
+Render nothing when the list is empty.
+
+### Figure
+
+The raised surface. Give the image `width` and `height` so the box is reserved. Loading is lazy.
+
+```html
+<figure class="a-figure">
+  <img src="/shot.png" alt="The folder list" width="800" height="450" loading="lazy" decoding="async" />
+  <figcaption>The folder list after upload.</figcaption>
+</figure>
+```
+
+A figure wider than the column scrolls inside `.a-figure-scroll`. The image in that scroller has `min-width: 34rem` and no max-width.
+
+```html
+<figure class="a-figure">
+  <div class="a-figure-scroll">
+    <img src="/wide.png" alt="A wide diagram" width="1400" height="600" loading="lazy" decoding="async" />
+  </div>
+  <figcaption>Read it by scrolling sideways.</figcaption>
+</figure>
+```
+
+### Callout
+
+A 2px copper rule on the left. The optional title is weight `650`.
+
+```html
+<aside class="a-callout">
+  <p class="a-callout-title">Keep the original</p>
+  <p>Re-encoding this file drops the camera metadata.</p>
+</aside>
+```
+
+### Metrics
+
+A number, what it is, and how it was measured. The third line is the point of the block.
+
+```html
+<ul class="a-metrics">
+  <li class="a-metric">
+    <span class="a-metric-value">2×</span>
+    <span class="a-metric-label">Smaller uploads</span>
+    <span class="a-metric-how">Median bytes, same folder, March</span>
+  </li>
+</ul>
+```
+
+### Timeline
+
+```html
+<ol class="a-timeline">
+  <li>
+    <span class="a-timeline-when">12 Mar</span>
+    <span class="a-timeline-what">Uploaded</span>
+    <span class="a-timeline-detail">Four photos from the camera</span>
+  </li>
+</ol>
+```
+
+### Definition list
+
+```html
+<dl class="a-deflist">
+  <div>
+    <dt>Owner</dt>
+    <dd>The person who created the folder</dd>
+  </div>
+</dl>
+```
+
+### Role line
+
+A Fraunces copper line under a title, for a subtitle that is not the kicker and not the lead:
+
+```html
+<p class="role-line">Family archive</p>
+```
 
 ---
 
-## 11. Motion, focus, targets
+## 10. Choice rows
 
-| Thing | Spec |
-|---|---|
-| Entering a view | Opacity `0→1` and `translateY(8px→0)` over `--dur`. Never translate on X. |
-| Header | §8.5 |
-| Row hover | Left accent bar `scaleY`, `--dur-fast` |
-| Button hover | Background color, `--dur-fast` |
-| Anything else | Still |
+When the reader picks a next place — a folder, a thread, a document — the row is a hairline list, not a card. The whole row is one link. Minimum height `4.5rem`.
 
-Focus, from `base.css`, on every host:
+```html
+<ul class="choice-list">
+  <li class="choice">
+    <a href="/folders/photos">
+      <span class="choice-num">01</span>
+      <span class="choice-body">
+        <span class="choice-title">Photos</span>
+        <span class="choice-teaser">Family albums from this year</span>
+      </span>
+      <span class="choice-meta">128</span>
+      <span class="choice-arrow" aria-hidden="true">→</span>
+    </a>
+  </li>
+  <li class="choice">
+    <a href="/folders/scans">
+      <span class="choice-num">02</span>
+      <span class="choice-body">
+        <span class="choice-title">Scans</span>
+        <span class="choice-teaser">Documents</span>
+      </span>
+      <span class="choice-meta">14</span>
+      <span class="choice-arrow" aria-hidden="true">→</span>
+    </a>
+  </li>
+</ul>
+```
+
+The index is Fraunces, tabular figures, `--accent-text`, `--step--1`. The title is `--step-1`, weight `600`. The teaser and the meta are `--step--1` and muted. The teaser line-height is `1.45`. Hover and keyboard focus grow the copper bar and turn the title `--accent-text`.
+
+A sibling list under a row, when the screen has one, is a wrap of muted links, weight `600`, `--step--1`, gap `--s2` by `--s4`. Hover turns them `--accent-text`. A link back up is the same type, with `margin-top: var(--s6)`.
+
+```html
+<ul class="siblings">
+  <li><a href="/folders/photos">Photos</a></li>
+  <li><a href="/folders/scans">Scans</a></li>
+</ul>
+<a class="up" href="/folders">Up</a>
+```
+
+---
+
+## 11. Focus and targets
 
 ```css
 :focus-visible {
@@ -427,78 +721,939 @@ Focus, from `base.css`, on every host:
 }
 ```
 
-Hit targets are at least 44×44px for header buttons, rows, and anything that is the primary tap on a phone. `.btn` at `2.75rem` meets that. `.btn-small` is the header exception the hub already ships (`2.25rem`); keep it in the header, and keep primary actions on `.btn`.
+That ring is the only radius on the page, apart from the diamond's dot. Hit targets for a primary control are at least 44×44px. `.btn` meets that. `.btn-small` is the header exception at `2.25rem`. Choice rows are at least `4.5rem` tall.
 
-A route change that replaces the `h1` moves focus to that heading (`tabIndex={-1}`) and writes the title into a visually hidden `aria-live="polite"` region. The first load of a document does not steal focus.
+`.sr-only` hides text visually and keeps it available to assistive tech. The stylesheet defines it.
 
-`.sr-only` is the clip pattern at the bottom of `base.css`.
+A keyboard walk from the top of the document reaches the skip link, then the header, then the main content, with the ring visible on every stop.
 
 ---
 
-## 12. Files to lift
+## 12. Checklist
 
-Copy verbatim:
+A service looks like the others when every line is true.
 
-| Path | Notes |
-|---|---|
-| `web/src/styles/tokens.css` | The whole contract |
-| `web/src/styles/fonts.css` | Subsets and unicode-range |
-| `web/src/styles/base.css` | Reset, grain, type, focus, fallbacks |
-| `web/src/styles/forms.css` | Controls. Admin class names included; they are the form language |
-| `web/public/fonts/*.woff2` | Six files |
-| `web/public/favicon.svg` | Tab icon |
-| `web/src/hooks/useDelayedFlag.ts` | 120ms skeleton gate |
+1. The background is `--paper`, the grain is the one in the stylesheet, and the service CSS contains no `box-shadow` and no hex outside `:root`.
+2. Copper text is `--accent-text`. `--accent` is a mark, a bar, a selection, or a stroke.
+3. The header shows the diamond, the wordmark linking to `https://filenkov.store`, the service list from section 5.1 with this host as `aria-current="page"`, and either `Checking sign-in…`, `Sign in`, or the username plus `Sign out`.
+4. Guests reach `https://filenkov.store/auth?return_to=…`. The service draws no Google button and reads no JWT.
+5. The first focusable control is the skip link. The view has one `h1` under a kicker. Buttons, fields, banners, and tables use the classes in the stylesheet.
+6. A list the reader chooses from is a hairline choice row. A short form sits in `.panel`.
+7. Loading, empty, and error copy are specific sentences. A skeleton waits 120ms.
+8. At 620px the wordmark is gone and the service list still scrolls. At 760px the page padding is `--s4`.
+9. `prefers-reduced-motion` collapses the two durations. A keyboard walk shows the focus ring on every stop.
+10. `lang` is `en`, `color-scheme` is `light`, the faces are the self-hosted files, and the tab icon is the diamond below.
 
-Copy and stop at the owl:
+---
 
-| Path | Keep | Drop |
-|---|---|---|
-| `web/src/styles/shell.css` | `.shell` through the `620px` media query | From `/* --- the owl` to the end of `.owl-ring` |
-| `web/src/hooks/useScrollChrome.ts` | The `data-header` machine and its constants | `data-owl`, `--read`, `setOwlState` |
-| `web/src/components/Layout.tsx` | Mark, service list, sign-in slot, skip link, footer | `Owl` and the departure animation |
+## 13. Stylesheet
 
-Copy when the screen has prose or a directory of choices:
+Save this as `/filenkov.css`. It is the entire visual layer.
 
-| Path | Keep |
-|---|---|
-| `web/src/styles/article.css` | All of it |
-| `web/src/components/article/index.tsx` | All of it |
-| `.branch-card` rules in `web/src/styles/tree.css` | The row, the bar, the index, the teaser. Rename them if `branch` would lie |
+```css
+/* Filenkov service stylesheet. One file. */
 
-Import order, for the files a service actually uses:
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/fraunces-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
-```ts
-import './styles/fonts.css'
-import './styles/tokens.css'
-import './styles/base.css'
-import './styles/shell.css'
-import './styles/article.css' // omit on a tool with no prose
-import './styles/forms.css'
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/fraunces-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Public Sans';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/public-sans-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Public Sans';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/public-sans-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Public Sans';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/public-sans-italic-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+    U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Public Sans';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/public-sans-italic-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Public Sans Fallback';
+  src: local('Arial'), local('Helvetica'), local('Liberation Sans');
+  size-adjust: 107%;
+  ascent-override: 92%;
+  descent-override: 24%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Fraunces Fallback';
+  src: local('Georgia'), local('Times New Roman'), local('Liberation Serif');
+  size-adjust: 104%;
+  ascent-override: 94%;
+  descent-override: 24%;
+  line-gap-override: 0%;
+}
+
+:root {
+  --paper: #f4efe6;
+  --paper-raised: #fffdf8;
+  --ink: #1a1612;
+  --ink-muted: #5c5348;
+  --rule: #d9d1c3;
+  --rule-strong: #b9ae9c;
+  --accent: #b85c38;
+  --accent-text: #8f4128;
+  --chip: #e6ddd0;
+  --danger: #8c2f24;
+  --danger-wash: #f4e4dc;
+
+  --serif: 'Fraunces', 'Fraunces Fallback', 'Iowan Old Style', 'Palatino Linotype', serif;
+  --sans: 'Public Sans', 'Public Sans Fallback', system-ui, 'Segoe UI', sans-serif;
+
+  --step--1: 0.8125rem;
+  --step-0: 1.0625rem;
+  --step-1: 1.25rem;
+  --step-2: 1.5rem;
+  --step-3: 1.9rem;
+  --step-4: clamp(2.2rem, 4.5vw, 3.1rem);
+
+  --measure: 34rem;
+
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --s7: 3rem;
+  --s8: 4.5rem;
+
+  --dur-fast: 140ms;
+  --dur: 240ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --header-h: 4.5rem;
+  --header-h-c: 3.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur: 1ms;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+html {
+  scroll-behavior: auto;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--sans);
+  font-size: var(--step-0);
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--paper);
+}
+
+a {
+  color: inherit;
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--serif);
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  margin: 0;
+}
+
+h1 { font-size: var(--step-4); }
+h2 { font-size: var(--step-3); }
+h3 { font-size: var(--step-2); }
+
+.kicker {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+  margin: 0 0 var(--s3);
+}
+
+.muted { color: var(--ink-muted); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--header-h);
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--s4);
+  top: var(--s2);
+  z-index: 30;
+  transform: translateY(-200%);
+  background: var(--ink);
+  color: var(--paper);
+  padding: var(--s2) var(--s4);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.skip-link:focus-visible { transform: translateY(0); }
+
+.header {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 20;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: var(--s5);
+  padding: 0 var(--s5);
+  transition:
+    transform var(--dur) var(--ease),
+    height var(--dur) var(--ease);
+}
+
+[data-header='hidden'] .header { transform: translateY(-100%); }
+
+[data-header='condensed'] .header {
+  height: var(--header-h-c);
+  background: color-mix(in srgb, var(--paper) 82%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+}
+
+[data-header='condensed'] .brand-name,
+[data-header='condensed'] .service-nav {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  text-decoration: none;
+  color: var(--ink);
+  flex: none;
+}
+
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  flex: none;
+}
+
+.brand-name,
+.service-nav { transition: opacity var(--dur-fast) var(--ease); }
+
+.brand-name {
+  font-family: var(--serif);
+  font-size: var(--step-1);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.service-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.service-nav a,
+.service-nav [aria-current='page'] {
+  text-decoration: none;
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.service-nav a:hover { color: var(--accent-text); }
+
+.service-nav [aria-current='page'] {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.service-lock {
+  font-size: 0.7em;
+  margin-left: 0.25em;
+}
+
+.header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex: none;
+}
+
+.user-name {
+  font-weight: 600;
+  font-size: var(--step--1);
+}
+
+.main {
+  flex: 1;
+  padding: var(--s5) var(--s5) var(--s8);
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  padding: var(--s5);
+  border-top: 1px solid var(--rule);
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: var(--s4);
+  margin-bottom: var(--s5);
+}
+
+.page-lead { margin: calc(var(--s2) * -1) 0 var(--s5); }
+
+.prose { max-width: var(--measure); }
+
+.prose p,
+.prose ul,
+.prose ol { margin: 0 0 var(--s4); }
+
+.prose ul,
+.prose ol { padding-left: var(--s5); }
+
+.prose li + li { margin-top: var(--s2); }
+
+.prose a {
+  color: var(--accent-text);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.lede {
+  font-size: var(--step-1);
+  line-height: 1.5;
+  color: var(--ink);
+  margin: 0 0 var(--s5);
+}
+
+.role-line {
+  margin: var(--s3) 0 var(--s5);
+  font-family: var(--serif);
+  font-size: var(--step-2);
+  font-weight: 650;
+  color: var(--accent-text);
+}
+
+.a-section {
+  margin: var(--s7) 0 0;
+  padding-top: var(--s5);
+  border-top: 1px solid var(--rule);
+}
+
+.a-section > h2 {
+  font-size: var(--step-2);
+  margin: 0 0 var(--s4);
+}
+
+.a-section h3 {
+  font-size: var(--step-1);
+  margin: var(--s5) 0 var(--s3);
+}
+
+.a-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  list-style: none;
+  margin: 0 0 var(--s4);
+  padding: 0;
+}
+
+.a-chips li {
+  background: var(--chip);
+  border: 1px solid var(--rule);
+  padding: 0.1rem 0.5rem;
+  font-size: var(--step--1);
+  color: var(--ink);
+}
+
+.a-figure {
+  margin: var(--s5) 0;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  padding: var(--s4);
+}
+
+.a-figure-scroll { overflow-x: auto; }
+
+.a-figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.a-figure-scroll img {
+  max-width: none;
+  min-width: 34rem;
+}
+
+.a-figure figcaption {
+  margin-top: var(--s3);
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.a-callout {
+  margin: var(--s5) 0;
+  padding-left: var(--s4);
+  border-left: 2px solid var(--accent);
+}
+
+.a-callout p { margin: 0 0 var(--s2); }
+.a-callout-title { font-weight: 650; }
+
+.a-metrics {
+  list-style: none;
+  margin: var(--s5) 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.a-metric {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
+  gap: var(--s1) var(--s4);
+  padding: var(--s4) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.a-metric-value {
+  grid-row: 1 / span 2;
+  font-family: var(--serif);
+  font-size: var(--step-2);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text);
+  line-height: 1.2;
+}
+
+.a-metric-label { font-weight: 600; }
+
+.a-metric-how {
+  color: var(--ink-muted);
+  font-size: var(--step--1);
+}
+
+.a-timeline {
+  list-style: none;
+  margin: var(--s5) 0;
+  padding: 0 0 0 var(--s4);
+  border-left: 1px solid var(--rule);
+}
+
+.a-timeline li {
+  display: grid;
+  gap: var(--s1);
+  padding-bottom: var(--s4);
+}
+
+.a-timeline-when {
+  font-size: var(--step--1);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.a-timeline-what { font-weight: 600; }
+.a-timeline-detail { color: var(--ink-muted); }
+
+.a-deflist { margin: var(--s5) 0; }
+
+.a-deflist > div {
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.a-deflist dt { font-weight: 650; }
+
+.a-deflist dd {
+  margin: var(--s1) 0 0;
+  color: var(--ink-muted);
+}
+
+.choice-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.choice + .choice { border-top: 1px solid var(--rule); }
+.choice:last-child { border-bottom: 1px solid var(--rule); }
+
+.choice > a {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--s3);
+  min-height: 4.5rem;
+  padding: var(--s4) var(--s2) var(--s4) var(--s3);
+  text-decoration: none;
+  color: inherit;
+}
+
+.choice > a::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transform-origin: top;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.choice > a:hover::before,
+.choice > a:focus-visible::before { transform: scaleY(1); }
+
+.choice > a:hover .choice-title,
+.choice > a:focus-visible .choice-title { color: var(--accent-text); }
+
+.choice-num {
+  font-family: var(--serif);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text);
+  font-size: var(--step--1);
+}
+
+.choice-body {
+  display: grid;
+  gap: var(--s1);
+  min-width: 0;
+}
+
+.choice-title {
+  font-size: var(--step-1);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.choice-teaser {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  line-height: 1.45;
+}
+
+.choice-meta {
+  font-size: var(--step--1);
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.choice-arrow { color: var(--ink-muted); }
+
+.siblings {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2) var(--s4);
+  margin: 0;
+  padding: var(--s3) 0 0;
+}
+
+.siblings a,
+.up {
+  color: var(--ink-muted);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: var(--step--1);
+}
+
+.up {
+  display: inline-block;
+  margin-top: var(--s6);
+}
+
+.siblings a:hover,
+.up:hover { color: var(--accent-text); }
+
+.panel {
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  padding: var(--s6);
+  max-width: 28rem;
+}
+
+.auth-page {
+  display: grid;
+  place-items: start;
+  justify-content: center;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s3);
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  padding: 0.7rem 1.1rem;
+  min-height: 2.75rem;
+  cursor: pointer;
+  text-decoration: none;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.btn:hover {
+  background: var(--accent-text);
+  border-color: var(--accent-text);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--ink);
+}
+
+.btn-ghost:hover {
+  background: var(--chip);
+  color: var(--ink);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.btn-danger:hover {
+  background: var(--danger);
+  color: var(--paper);
+}
+
+.btn-small {
+  padding: var(--s2) var(--s3);
+  min-height: 2.25rem;
+  font-size: var(--step--1);
+}
+
+.banner {
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--rule);
+  background: var(--chip);
+  color: var(--ink);
+  margin-bottom: var(--s4);
+}
+
+.banner.error {
+  border-color: var(--danger);
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  background: var(--paper-raised);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: var(--s3);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+th {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-weight: 600;
+  background: var(--chip);
+}
+
+tr:last-child td { border-bottom: 0; }
+
+.status-blocked {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+select.status-blocked { border-color: var(--danger); }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+  margin-bottom: var(--s5);
+}
+
+.field > label,
+.filters label {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.field input,
+.field textarea,
+.filters input,
+select {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  border-radius: 0;
+}
+
+.field input,
+.field textarea,
+.filters input {
+  padding: var(--s2) var(--s3);
+}
+
+.filters input {
+  flex: 1 1 18rem;
+  min-width: 12rem;
+}
+
+.field textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+select {
+  padding: var(--s1) var(--s2);
+  min-width: 7.5rem;
+}
+
+select:disabled,
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.empty {
+  padding: var(--s6) var(--s4);
+  text-align: center;
+  color: var(--ink-muted);
+}
+
+.skeleton {
+  min-height: 18rem;
+  display: grid;
+  gap: var(--s3);
+  align-content: start;
+}
+
+.skeleton span {
+  height: 0.75rem;
+  background: var(--rule);
+  opacity: 0.55;
+}
+
+.error-block {
+  min-height: 18rem;
+  border-left: 2px solid var(--danger);
+  padding-left: var(--s4);
+}
+
+.error-block p {
+  margin: 0 0 var(--s4);
+  color: var(--danger);
+}
+
+.view-in { animation: view-in var(--dur) var(--ease) both; }
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (max-width: 760px) {
+  .main {
+    padding-left: var(--s4);
+    padding-right: var(--s4);
+  }
+
+  .header {
+    gap: var(--s4);
+    padding: 0 var(--s4);
+  }
+
+  .choice > a { grid-template-columns: 2rem minmax(0, 1fr) auto; }
+
+  .choice-meta {
+    grid-column: 2;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 620px) {
+  .brand-name { display: none; }
+
+  .service-nav {
+    gap: var(--s3);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .service-nav::-webkit-scrollbar { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-in { animation: none; }
+}
 ```
 
-Leave `tree.css` and `chat.css` on the hub.
-
 ---
 
-## 13. Checklist before a service ships
+## 14. Favicon
 
-A host looks like the others when every line below is true.
+Save this as `/favicon.svg`.
 
-1. The page background is `--paper`, the grain is the one from `base.css`, and the stylesheet contains no `box-shadow` and no new hex.
-2. Copper text is `--accent-text`. `--accent` is only a mark, a bar, a selection, or a stroke.
-3. The header shows the diamond, the wordmark linking home, the service list from §8.3 with the current host marked, and either `Checking sign-in…`, `Sign in`, or `username` plus `Sign out`.
-4. Guests reach the hub `/auth` with `return_to`. The service draws no Google button.
-5. The first focusable control is the skip link. The view has one `h1` under a kicker. Buttons, fields, banners, and tables use the classes in `forms.css`.
-6. A list the reader chooses from is hairline rows with the accent bar. A short form sits in `.panel`.
-7. Loading, empty, and error copy are specific sentences. Skeletons wait 120ms.
-8. At 620px the wordmark is gone and the service links still scroll. At 760px the page padding is `--s4`.
-9. `prefers-reduced-motion` collapses the two durations, and a keyboard walk shows the focus ring on every stop.
-10. `lang` is `en`, `color-scheme` is `light`, fonts are the self-hosted files, and the tab icon is the shared favicon.
-
----
-
-## 14. Keeping one language
-
-Change the hub's `tokens.css` first, then port that diff. A service that needs a color the table in §4 does not have adds the token on the hub in the same change, with a one-line note of what it is for.
-
-A shared package is the right move once two services outside this repo are copying these files and drifting. Until that second consumer exists, the copy in §12 is the contract, and this document is the checklist that keeps the copies honest.
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="#f4efe6"/>
+  <path d="M16 3 L29 16 L16 29 L3 16 Z" fill="none" stroke="#1a1612" stroke-width="1.75"/>
+  <circle cx="16" cy="16" r="3.2" fill="#b85c38"/>
+</svg>
+```
