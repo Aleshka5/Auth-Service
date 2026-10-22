@@ -292,6 +292,12 @@ func (s *Server) newProxy() *httputil.ReverseProxy {
 				pr.Out.URL.Path = stripPath(pr.In.URL.Path, t.route.stripPrefix)
 				pr.Out.URL.RawPath = ""
 			}
+			// Config headers win over anything the client sent. They carry the
+			// shared service token that switch-service expects, so a browser
+			// never sees it and cannot override it.
+			for name, value := range t.route.headers {
+				pr.Out.Header.Set(name, value)
+			}
 			s.applyProxyIdentity(pr, t)
 			applyHermesPublicPrefix(pr, t)
 		},

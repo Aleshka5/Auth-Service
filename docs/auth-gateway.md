@@ -39,8 +39,8 @@ Browser
 ```
 
 Hermes and storage/messanger sit on `auth_network`; User-Service on external
-`user_network`; Qwen Image on external `qwen_image_gen_network`; llama.cpp
-(`qwen38`) on external `llm_network`; RAG-Chat (`rag-edge`) on external `rag_edge`.
+`user_network`; Qwen Image on external `models_network`; llama.cpp
+(`qwen38`) on external `models_network` (both owned by Switch-Service); RAG-Chat (`rag-edge`) on external `rag_edge`.
 
 ## Config
 

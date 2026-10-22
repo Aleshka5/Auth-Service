@@ -21,7 +21,7 @@ Live hosts today: `filenkov.store`, `storage.filenkov.store`, `messanger.filenko
 
 Qwen Image is one Flask process (UI + `POST /api/generate`) on container port `8000`. A frame can take minutes. The gateway default proxy timeout is 60s.
 
-The image container is reached on Podman network **`qwen_image_gen_network`**, not `auth_network`. Compose service / container name on that network: **`qwen-image`**.
+The image container is reached on Podman network **`models_network`** (owned by Switch-Service), not `auth_network`. Compose service / container name on that network: **`qwen-image`**.
 
 ## 2. Who is allowed
 
@@ -41,7 +41,7 @@ Existing edge checks still apply first: no access JWT → HTML `302` to `{PUBLIC
 ## 3. Assumptions
 
 1. User-Service is up on `user_network`. `GET /users/{id}/roles/image` already behaves as in its story.
-2. The image stack creates `qwen_image_gen_network` and runs the container as `qwen-image` with no published host port. The gateway joins that network as `external: true`, the same way it joins `llm_network`.
+2. Switch-Service creates `models_network` and runs the container as `qwen-image` with no published host port. The gateway joins that network as `external: true`, the same way it joins `llm_network`.
 3. Upstream is `http://qwen-image:8000`.
 4. The image app does not read roles and does not verify JWTs. This gateway is the only allow/deny.
 
@@ -92,7 +92,7 @@ Show it only when `serviceRole(user, 'image')` is `FAMILY` or `ADMIN`. Hide it f
 
 ## 7. Compose and Caddy
 
-`deploy/docker-compose.yml`: gateway attaches external network `qwen_image_gen_network`. Do not create that network in the Auth stack. If it is missing, the image host fails and the other hosts do not.
+`deploy/docker-compose.yml`: gateway attaches external network `models_network`. Do not create that network in the Auth stack. If it is missing, the image host fails and the other hosts do not.
 
 `deploy/Caddyfile.filenkov`: one TLS site, same shape as the other product hosts — `reverse_proxy localhost:8083`, no path routing, no `encode gzip`. HTTP → HTTPS redirect for `image.filenkov.store`. DNS points at the same address as the other hosts.
 
@@ -118,7 +118,7 @@ Show it only when `serviceRole(user, 'image')` is `FAMILY` or `ADMIN`. Hide it f
 - Header test: Image is present for `image` `FAMILY` and `ADMIN`, absent for a guest and for `image` `STRANGER`. Messanger, Storage, and Hermes stay as they are.
 - Admin test: the Image column renders for a user with no `image` row and a `PUT` sends `/users/{id}/roles/image`.
 - `go test ./...` and `cd web && npm test` pass.
-- Gateway compose lists `qwen_image_gen_network` as external. Caddy site is in `deploy/Caddyfile.filenkov`.
+- Gateway compose lists `models_network` as external. Caddy site is in `deploy/Caddyfile.filenkov`.
 
 ## 10. Docs to update when this ships
 
@@ -127,7 +127,7 @@ Show it only when `serviceRole(user, 'image')` is `FAMILY` or `ADMIN`. Hide it f
 ## 11. Operator order
 
 1. User-Service stack (`user_network`).
-2. Image stack, so `qwen_image_gen_network` and the name `qwen-image` exist.
+2. Switch-Service `make network` and the image model, so `models_network` and the name `qwen-image` exist.
 3. Auth stack, so the gateway joins that network.
 4. DNS `image.filenkov.store`. Copy `deploy/Caddyfile.filenkov` to `/etc/caddy/Caddyfile` and reload Caddy.
 5. In `/admin`, set `image` to `FAMILY` or `ADMIN` for each person who should see the link.
@@ -138,13 +138,13 @@ Until step 2, only `image.filenkov.store` errors. The hub and the other hosts st
 
 - **Gateway.** `role_field: image` is a known field. `applyServiceRole` (`internal/gateway/identity.go`) runs after `authorize`: on non-`public` routes of an image host it calls `GET /users/{sub}/roles/image` and proxies only `FAMILY` / `ADMIN`. `STRANGER`, `BLOCKED`, and any other value are `403` `{"error":"forbidden"}` (deny by default); user 404 is `401`; any other error is `503` `{"error":"unavailable"}`. Storage keeps its old behavior (lookup, inject `X-Storage-Role`, never deny on the role). The image host gets the four `X-Auth-*` only.
 - **`/healthz`.** The gateway used to answer `GET /healthz` itself on every host, which would have hidden the app's health path. It now answers locally unless the request host has a literal `match: /healthz` route; only `image.filenkov.store` does. Loopback and compose healthchecks still hit the gateway.
-- **Config.** `deploy/gateway.yaml` adds upstream `qwen_image` and host `image.filenkov.store` exactly as §5. `deploy/docker-compose.yml` attaches the gateway to external `qwen_image_gen_network`. `deploy/Caddyfile.filenkov` has the TLS site and the HTTP→HTTPS redirect.
+- **Config.** `deploy/gateway.yaml` adds upstream `qwen_image` and host `image.filenkov.store` exactly as §5. `deploy/docker-compose.yml` attaches the gateway to external `models_network`. `deploy/Caddyfile.filenkov` has the TLS site and the HTTP→HTTPS redirect.
 - **SPA.** `Layout.tsx` shows **Image** only for `image` `FAMILY` / `ADMIN`, no lock. `Admin.tsx` has `image` in `FIXED_SERVICES`.
 - **Tests.** `TestLoadDefaultYAML`, `TestParseRoleFieldImage`, `TestHealthzLocalUnlessHostRoutesIt`, `TestImageHealthzPublicNoRoleLookup`, `TestImageHealthzWithoutUserService`, `TestImageAnonymousRedirectVs401`, `TestImageAllowedRolesProxied`, `TestImageDeniedRolesForbidden`, `TestImageHubBlockedAndRejectedForbidden`, `TestImageRoleLookupFailure`; `Layout.test.tsx` and `Admin.test.tsx` Image cases.
 
 Decisions and deviations:
 
 1. Public routes on the image host skip the role lookup, so `/healthz` stays reachable for a signed-in `STRANGER` and while User-Service is down.
-2. A missing `qwen_image_gen_network` stops the whole gateway container from starting — Compose refuses a missing `external` network, same as `llm_network`. §7 and §11 ("only the image host fails") hold only once the network exists and `qwen-image` is down. Create the network first (`podman network create qwen_image_gen_network`) if the image stack is not up.
+2. A missing `models_network` stops the whole gateway container from starting — Compose refuses a missing `external` network, same as `llm_network`. §7 and §11 ("only the image host fails") hold only once the network exists and `qwen-image` is down. Create the network first (`podman network create models_network`) if the image stack is not up.
 3. As on storage, messenger, and LLM, the browser `Cookie` header is forwarded, so `auth_access` reaches the image app as a cookie. No `Authorization` header is set.
 4. The role is looked up on every non-public request (UI assets included), like storage. There is no cache.

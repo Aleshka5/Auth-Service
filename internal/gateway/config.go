@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -122,6 +123,10 @@ type Route struct {
 	Methods         []string `yaml:"methods"`
 	InjectAccessJWT *bool    `yaml:"inject_access_jwt"`
 	Redirect        string   `yaml:"redirect"`
+	// Headers are set on the upstream request, after the path rewrite. Values
+	// support ${VAR} expansion from the gateway environment, so a shared
+	// service token stays in .env and never in this file.
+	Headers map[string]string `yaml:"headers"`
 }
 
 type compiledRoute struct {
@@ -134,6 +139,7 @@ type compiledRoute struct {
 	methods         []string
 	injectAccessJWT bool
 	redirect        string
+	headers         map[string]string
 }
 
 type compiledHost struct {
@@ -344,6 +350,10 @@ func compileRoute(host string, i int, rt Route, upstreams map[string]string) (co
 	if rt.InjectAccessJWT != nil {
 		injectJWT = *rt.InjectAccessJWT
 	}
+	headers, err := compileHeaders(prefix, rt.Headers)
+	if err != nil {
+		return compiledRoute{}, err
+	}
 	return compiledRoute{
 		match:           match,
 		upstreamName:    upName,
@@ -353,7 +363,41 @@ func compileRoute(host string, i int, rt Route, upstreams map[string]string) (co
 		preserveHost:    preserve,
 		methods:         methods,
 		injectAccessJWT: injectJWT,
+		headers:         headers,
 	}, nil
+}
+
+// compileHeaders validates route headers and expands ${VAR} from the process
+// environment. An unset variable is a configuration error at load time: a
+// route that silently sends an empty service token would fail at request time
+// with a confusing 401.
+func compileHeaders(prefix string, raw map[string]string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(raw))
+	for name, value := range raw {
+		key := http.CanonicalHeaderKey(strings.TrimSpace(name))
+		if key == "" || strings.ContainsAny(key, " :	") {
+			return nil, fmt.Errorf("%s: headers: invalid header name %q", prefix, name)
+		}
+		missing := ""
+		expanded := os.Expand(value, func(varName string) string {
+			v := os.Getenv(varName)
+			if v == "" {
+				missing = varName
+			}
+			return v
+		})
+		if missing != "" {
+			return nil, fmt.Errorf("%s: headers.%s: environment variable %s is not set", prefix, key, missing)
+		}
+		if strings.ContainsAny(expanded, "\r\n") {
+			return nil, fmt.Errorf("%s: headers.%s: value must be a single line", prefix, key)
+		}
+		out[key] = expanded
+	}
+	return out, nil
 }
 
 func normalizeMethods(raw []string) ([]string, error) {

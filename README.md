@@ -19,7 +19,7 @@ docs/             auth-gateway.md, user-story-*.md (directory contract, storage 
 
 ## Quick start (Podman Compose)
 
-Start the **User-Service** stack first so external network `user_network` and hostname `user_service` exist. Start the **LiteLLM** stack so `llm_network` and hostname `litellm-proxy-server` exist (owl chat), and have the one-off llama.cpp container `qwen38` already on that network. Start the **image** stack so `qwen_image_gen_network` and hostname `qwen-image` exist. Auth compose **attaches** those networks; it does not create User-Service, LiteLLM, `qwen38`, or the image service.
+Start the **User-Service** stack first so external network `user_network` and hostname `user_service` exist. Start the **LiteLLM** stack so `llm_network` and hostname `litellm-proxy-server` exist (owl chat), and The model containers `qwen38` (llama.cpp) and `qwen-image` are owned by **Switch-Service** in the shared `models_network` (create it with `podman network create models_network`, or Switch-Service `make network`, which also attaches the consumers). Auth compose **attaches** those networks; it does not create User-Service, LiteLLM, the model containers, or `models_network`.
 
 1. Copy env and fill Google OAuth + `JWT_SECRET` (≥32 random bytes):
 
@@ -50,7 +50,7 @@ Start the **User-Service** stack first so external network `user_network` and ho
    # or: make rebuild
    ```
 
-   Networks: `auth_network` (created here) + `user_network` (`external: true`) + `llm_network` (`external: true`) + `qwen_image_gen_network` (`external: true`, gateway only). Services: `redis` (`redis:7-alpine`), `web`, `api`, `gateway`.
+   Networks: `auth_network` (created here) + `user_network` (`external: true`) + `llm_network` (`external: true`) + `models_network` (`external: true`, gateway only — `qwen38` and `qwen-image` live there) + `rag_edge` (`external: true`, gateway only). Services: `redis` (`redis:7-alpine`), `web`, `api`, `gateway`.
 
    Compose publishes **only** the gateway:
 
@@ -63,9 +63,9 @@ Start the **User-Service** stack first so external network `user_network` and ho
 
    Gateway process health: `GET http://127.0.0.1:8083/healthz` (not the proxied `/health`). API healthcheck: `GET http://127.0.0.1:8000/health` inside the container (Redis ping).
 
-If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail. If `qwen38` is down, `llm.filenkov.store` returns a gateway proxy error for a hub `ADMIN`. If `litellm-proxy-server` is down, the hub owl chat fails and sign-in still works. If `messanger` is down, `messanger.filenkov.store` returns a gateway proxy error on that host only. If `qwen-image` is down, `image.filenkov.store` returns a gateway proxy error on that host only; the image **network** must still exist for the gateway container to start (`podman network create qwen_image_gen_network` if the image stack is not up yet).
+If `user_service` is down, Google callback, `/api/me`, and storage-host role lookups fail. If `qwen38` is down, `llm.filenkov.store` returns a gateway proxy error for a hub `ADMIN`. If `litellm-proxy-server` is down, the hub owl chat fails and sign-in still works. If `messanger` is down, `messanger.filenkov.store` returns a gateway proxy error on that host only. If `qwen-image` is down, `image.filenkov.store` returns a gateway proxy error on that host only; the model **network** must still exist for the gateway container to start (`podman network create models_network` if Switch-Service is not up yet).
 
-Operator order: User-Service stack, LiteLLM stack (so `llm_network` and `litellm-proxy-server` exist for owl chat) with `qwen38` already on that network, image stack (so `qwen_image_gen_network` and `qwen-image` exist), Auth stack, Common (WebStorage data volumes), then WebStorage (`app` joins `auth_network` as external so `http://app:8000` resolves) and HomeMessanger (`messanger` joins the same network so `http://messanger:8000` resolves).
+Operator order: User-Service stack, LiteLLM stack (so `llm_network` and `litellm-proxy-server` exist for owl chat) with `qwen38` already on that network, Switch-Service `make network` and the models it runs (so `models_network`, `qwen38`, `qwen-image` exist), Auth stack, Common (WebStorage data volumes), then WebStorage (`app` joins `auth_network` as external so `http://app:8000` resolves) and HomeMessanger (`messanger` joins the same network so `http://messanger:8000` resolves).
 
 ## Host Caddy (TLS only)
 
@@ -219,7 +219,7 @@ The gateway strips incoming `X-Auth-*`, `X-User-Id`, and `X-Storage-Role` so cli
 
 **Messenger host** (`messanger.filenkov.store`, `role_field: global_role`) is a non–User-Service upstream `http://messanger:8000` on `auth_network`: `X-Auth-*` only, `/health` public, catch-all `auth: session`, 5m proxy timeout. No User-Service call, no `X-User-Id` / `X-Storage-Role`. Cookie is forwarded; the messenger reads none. The access JWT is not sent.
 
-**Image host** (`image.filenkov.store`, `role_field: image`) is a non–User-Service upstream `http://qwen-image:8000` on external `qwen_image_gen_network`: `X-Auth-*` only (hub `global_role` as `X-Auth-Role`), `/healthz` public (the app's, not the gateway's), catch-all `auth: session`, 30m proxy timeout. On session routes the gateway calls `GET /users/{id}/roles/image` and proxies only `FAMILY` / `ADMIN`; `STRANGER` (including no row) and `BLOCKED` → 403, user 404 → 401, User-Service error → 503. A hub `ADMIN` with no `image` row is refused. No `X-User-Id` / per-service role header; the access JWT is not sent.
+**Image host** (`image.filenkov.store`, `role_field: image`) is a non–User-Service upstream `http://qwen-image:8000` on external `models_network`: `X-Auth-*` only (hub `global_role` as `X-Auth-Role`), `/healthz` public (the app's, not the gateway's), catch-all `auth: session`, 30m proxy timeout. On session routes the gateway calls `GET /users/{id}/roles/image` and proxies only `FAMILY` / `ADMIN`; `STRANGER` (including no row) and `BLOCKED` → 403, user 404 → 401, User-Service error → 503. A hub `ADMIN` with no `image` row is refused. No `X-User-Id` / per-service role header; the access JWT is not sent.
 
 **LLM host** (`llm.filenkov.store`) is a non–User-Service upstream `http://qwen38:4001` (llama.cpp server, container `qwen38`, not in this compose, on external `llm_network`): `X-Auth-*` only (hub `global_role`), catch-all `auth: admin`, 10m proxy timeout. No User-Service call and no access JWT. The hub header links it as **Chat** for hub admins only. Owl chat still uses LiteLLM at `litellm-proxy-server:4000` via `LLM_HOST`.
 
@@ -263,7 +263,7 @@ Hub edge auth uses access-JWT `global_role`. Per-service roles are User-Service 
 
 ## Gateway routing
 
-YAML: `deploy/gateway.yaml`. First matching route wins. Hosts: `filenkov.store` (hub), `storage.filenkov.store` (one upstream `http://app:8000`, `/health` public, 30m proxy timeout), `messanger.filenkov.store` (one upstream `http://messanger:8000` on `auth_network`, `/health` public, catch-all `auth: session`, 5m proxy timeout), `image.filenkov.store` (one upstream `http://qwen-image:8000` on `qwen_image_gen_network`, `role_field: image`, `/healthz` public, catch-all `auth: session`, 30m proxy timeout), and `llm.filenkov.store` (one upstream `http://qwen38:4001` on `llm_network`, llama.cpp container `qwen38` not in this compose, catch-all `auth: admin`, 10m proxy timeout). Hub `role_field` is `global_role`. `GET /users` (exact) is `auth: admin` → User-Service. `POST /users`, `/users/by-google-sub/*`, and `/users/by-email/*` are `auth: reject` (404 at the gateway; both lookups are service-to-service on `user_network` only). `/users/*` proxies to User-Service (`auth: session`: valid access JWT required). Full schema and Caddy notes: [docs/auth-gateway.md](docs/auth-gateway.md).
+YAML: `deploy/gateway.yaml`. First matching route wins. Hosts: `filenkov.store` (hub), `storage.filenkov.store` (one upstream `http://app:8000`, `/health` public, 30m proxy timeout), `messanger.filenkov.store` (one upstream `http://messanger:8000` on `auth_network`, `/health` public, catch-all `auth: session`, 5m proxy timeout), `image.filenkov.store` (one upstream `http://qwen-image:8000` on `models_network`, `role_field: image`, `/healthz` public, catch-all `auth: session`, 30m proxy timeout), and `llm.filenkov.store` (one upstream `http://qwen38:4001` on `models_network`, llama.cpp container `qwen38` owned by Switch-Service, catch-all `auth: admin`, 10m proxy timeout). Hub `role_field` is `global_role`. `GET /users` (exact) is `auth: admin` → User-Service. `POST /users`, `/users/by-google-sub/*`, and `/users/by-email/*` are `auth: reject` (404 at the gateway; both lookups are service-to-service on `user_network` only). `/users/*` proxies to User-Service (`auth: session`: valid access JWT required). Full schema and Caddy notes: [docs/auth-gateway.md](docs/auth-gateway.md).
 
 ## What was removed
 

@@ -506,3 +506,78 @@ hosts:
 		t.Fatal("unexpected host")
 	}
 }
+
+func TestRouteHeadersExpandedFromEnv(t *testing.T) {
+	t.Setenv("SWITCH_TOKEN", "token-from-env")
+	file, err := Parse([]byte(`
+listen: ":0"
+upstreams: {api: "http://api:8000"}
+hosts:
+  filenkov.store:
+    role_field: global_role
+    routes:
+      - match: /api/services/*
+        upstream: api
+        auth: admin
+        headers:
+          X-Service-Token: "${SWITCH_TOKEN}"
+          X-Static: "plain"
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	router, err := file.Router()
+	if err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	host, route, ok := router.Match("filenkov.store", "/api/services/ocr/state")
+	if !ok || route == nil {
+		t.Fatal("route did not match")
+	}
+	_ = host
+	if got := route.headers["X-Service-Token"]; got != "token-from-env" {
+		t.Fatalf("X-Service-Token %q", got)
+	}
+	if got := route.headers["X-Static"]; got != "plain" {
+		t.Fatalf("X-Static %q", got)
+	}
+}
+
+func TestRouteHeadersMissingEnvFails(t *testing.T) {
+	t.Setenv("SWITCH_TOKEN", "")
+	_, err := Parse([]byte(`
+listen: ":0"
+upstreams: {api: "http://api:8000"}
+hosts:
+  filenkov.store:
+    role_field: global_role
+    routes:
+      - match: /api/services
+        upstream: api
+        auth: admin
+        headers:
+          X-Service-Token: "${SWITCH_TOKEN}"
+`))
+	if err == nil || !strings.Contains(err.Error(), "SWITCH_TOKEN") {
+		t.Fatalf("expected missing env error, got %v", err)
+	}
+}
+
+func TestRouteHeadersRejectBadName(t *testing.T) {
+	_, err := Parse([]byte(`
+listen: ":0"
+upstreams: {api: "http://api:8000"}
+hosts:
+  filenkov.store:
+    role_field: global_role
+    routes:
+      - match: /api/services
+        upstream: api
+        auth: admin
+        headers:
+          "bad name": "x"
+`))
+	if err == nil || !strings.Contains(err.Error(), "invalid header name") {
+		t.Fatalf("expected invalid header name, got %v", err)
+	}
+}

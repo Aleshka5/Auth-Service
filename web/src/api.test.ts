@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   fetchMe,
+  fetchServices,
   fetchUser,
   fetchUsers,
   googleAuthPath,
   logout,
   putGlobalRole,
   putServiceRole,
+  putServiceState,
 } from './api'
 import { jsonResponse, stranger, userServiceError } from './test/fixtures'
 
@@ -219,6 +221,63 @@ describe('user-service admin api', () => {
       '/api/refresh',
       `/users/${stranger.id}/role`,
     ])
+  })
+})
+
+describe('switch-service api', () => {
+  const host = {
+    ram: {
+      total_mib: 90365,
+      used_mib: 40969,
+      available_mib: 49396,
+      reserve_mib: 8192,
+      budget_mib: 82173,
+      claimed_mib: 36352,
+      free_mib: 45821,
+    },
+    vram: null,
+  }
+
+  it('loads the snapshot from GET /api/services', async () => {
+    const fetch = fetchMock(async (url) => {
+      if (url === '/api/services') return jsonResponse({ host, services: [], active_transitions: [] })
+      return jsonResponse({ error: 'unexpected' }, 500)
+    })
+    await expect(fetchServices()).resolves.toMatchObject({ services: [], host: { vram: null } })
+    expect(fetch.mock.calls[0][0]).toBe('/api/services')
+    expect(fetch.mock.calls[0][1]).toMatchObject({ credentials: 'include' })
+  })
+
+  it('posts the requested state and ignores the 202 transition body', async () => {
+    const fetch = fetchMock(async (url, init) => {
+      if (url === '/api/services/ocr/state' && init?.method === 'POST') {
+        return jsonResponse({ noop: false, transition: { phase: 'starting' } }, 202)
+      }
+      return jsonResponse({ error: 'unexpected' }, 500)
+    })
+    await expect(putServiceState('ocr', 'gpu')).resolves.toBeUndefined()
+    expect(fetch.mock.calls[0][1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({ state: 'gpu' }),
+      credentials: 'include',
+    })
+  })
+
+  it('accepts a 202 without a body', async () => {
+    fetchMock(async () => new Response(null, { status: 202 }))
+    await expect(putServiceState('ocr', 'off')).resolves.toBeUndefined()
+  })
+
+  it('keeps the switch-service error code next to the message', async () => {
+    fetchMock(async () =>
+      jsonResponse({ error: { code: 'INSUFFICIENT_VRAM', message: 'Not enough VRAM for gpu' } }, 409),
+    )
+    await expect(putServiceState('ocr', 'gpu')).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 409,
+      code: 'INSUFFICIENT_VRAM',
+      message: 'Not enough VRAM for gpu',
+    })
   })
 })
 

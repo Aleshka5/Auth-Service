@@ -179,6 +179,16 @@ button:disabled {
   color: var(--ink);
 }
 
+/* Three-state runtime switch: Off | CPU | GPU. */
+.segmented {
+  display: inline-flex;
+  gap: var(--s1);
+}
+
+.services-memory {
+  margin: calc(var(--s2) * -1) 0 var(--s5);
+}
+
 .empty {
   padding: var(--s6) var(--s4);
   text-align: center;

@@ -1,12 +1,24 @@
-import type { Role, ServiceRole, ServiceRoleEntry, User, UserList, UserListItem } from './types'
+import type {
+  Role,
+  ServiceRole,
+  ServiceRoleEntry,
+  ServiceState,
+  ServicesSnapshot,
+  User,
+  UserList,
+  UserListItem,
+} from './types'
 
 export class ApiError extends Error {
   status: number
+  /** Machine-readable code from `{"error":{"code":…,"message":…}}`, when the service sent one. */
+  code?: string
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -15,19 +27,26 @@ type ErrorBody = {
   message?: string
 }
 
-async function readError(res: Response): Promise<string> {
+async function readErrorDetail(res: Response): Promise<{ message: string; code?: string }> {
   const text = await res.text()
-  if (!text) return res.statusText || `Request failed (${res.status})`
+  if (!text) return { message: res.statusText || `Request failed (${res.status})` }
   try {
     const body = JSON.parse(text) as ErrorBody
-    if (typeof body.error === 'string' && body.error) return body.error
+    if (typeof body.error === 'string' && body.error) return { message: body.error }
     if (body.error && typeof body.error === 'object') {
-      return body.error.message || body.error.code || text
+      return {
+        message: body.error.message || body.error.code || text,
+        code: body.error.code,
+      }
     }
-    return body.message || text
+    return { message: body.message || text }
   } catch {
-    return text
+    return { message: text }
   }
+}
+
+async function readError(res: Response): Promise<string> {
+  return (await readErrorDetail(res)).message
 }
 
 async function postRefresh(): Promise<Response> {
@@ -63,12 +82,17 @@ async function request<T>(path: string, init: RequestInit = {}, retried = false)
     }
   }
   if (!res.ok) {
-    throw new ApiError(res.status, await readError(res))
+    const detail = await readErrorDetail(res)
+    throw new ApiError(res.status, detail.message, detail.code)
   }
   if (res.status === 204) {
     return undefined as T
   }
-  return (await res.json()) as T
+  const text = await res.text()
+  if (!text) {
+    return undefined as T
+  }
+  return JSON.parse(text) as T
 }
 
 export function googleAuthPath(returnTo: string | null): string {
@@ -154,5 +178,18 @@ export async function putServiceRole(id: string, service: string, role: ServiceR
   await request(`/users/${encodeURIComponent(id)}/roles/${encodeURIComponent(service)}`, {
     method: 'PUT',
     body: JSON.stringify({ role }),
+  })
+}
+
+/** Host budget plus every model service on it. */
+export async function fetchServices(): Promise<ServicesSnapshot> {
+  return request<ServicesSnapshot>('/api/services')
+}
+
+/** Asks a service to move to off/cpu/gpu. The 202 body is a transition record we do not need. */
+export async function putServiceState(id: string, state: ServiceState): Promise<void> {
+  await request<unknown>(`/api/services/${encodeURIComponent(id)}/state`, {
+    method: 'POST',
+    body: JSON.stringify({ state }),
   })
 }

@@ -41,6 +41,7 @@ type probe struct {
 	userID          string
 	cookie          string
 	authorization   string
+	serviceToken    string
 	spoofedLeft     string
 	forwardedHost   string
 	forwardedPrefix string
@@ -71,6 +72,7 @@ func newUpstream(t *testing.T) (*httptest.Server, *probe) {
 		p.userID = r.Header.Get("X-User-Id")
 		p.cookie = r.Header.Get("Cookie")
 		p.authorization = r.Header.Get("Authorization")
+		p.serviceToken = r.Header.Get("X-Service-Token")
 		p.spoofedLeft = r.Header.Get("X-Auth-Spoof")
 		p.forwardedHost = r.Header.Get("X-Forwarded-Host")
 		p.forwardedPrefix = r.Header.Get("X-Forwarded-Prefix")
@@ -1905,5 +1907,64 @@ func TestImageRoleLookupFailure(t *testing.T) {
 	assertErrorBody(t, rec, "unauthorized")
 	if hr.image.path != "" {
 		t.Fatal("must not proxy on missing user")
+	}
+}
+
+func TestServiceRouteInjectsTokenAndOverridesClient(t *testing.T) {
+	t.Setenv("SWITCH_TOKEN", "switch-secret")
+	product, productProbe := newUpstream(t)
+	userSvc, userProbe := newUpstream(t)
+	file, err := Parse([]byte(`
+listen: ":0"
+public_origin: "https://filenkov.store"
+rate_limit:
+  requests_per_minute: 10000
+upstreams:
+  api: "` + product.URL + `"
+  user_service: "` + userSvc.URL + `"
+hosts:
+  filenkov.store:
+    role_field: global_role
+    routes:
+      - match: /api/services
+        upstream: api
+        auth: admin
+        headers:
+          X-Service-Token: "${SWITCH_TOKEN}"
+      - match: /api/services/*
+        upstream: api
+        auth: admin
+        headers:
+          X-Service-Token: "${SWITCH_TOKEN}"
+      - match: /api/*
+        upstream: api
+        auth: session
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hr := newGWFromFile(t, file, productProbe, userProbe)
+
+	// Anonymous stays out: admin route, no session.
+	if rec := hr.do(req(http.MethodGet, "/api/services")); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous /api/services = %d, want 401", rec.Code)
+	}
+
+	_, raw := hr.login("boss@b.c", "boss", "ADMIN")
+	r := withAccess(req(http.MethodPost, "/api/services/ocr/state"), raw)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Service-Token", "client-spoof")
+	rec := hr.do(r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	if productProbe.path != "/api/services/ocr/state" {
+		t.Fatalf("upstream path %q", productProbe.path)
+	}
+	if productProbe.serviceToken != "switch-secret" {
+		t.Fatalf("X-Service-Token %q, want the configured value", productProbe.serviceToken)
+	}
+	if productProbe.authEmail != "boss@b.c" {
+		t.Fatalf("X-Auth-Email %q", productProbe.authEmail)
 	}
 }

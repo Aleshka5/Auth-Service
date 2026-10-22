@@ -23,12 +23,16 @@ upstreams:
   storage: "http://app:8000"
   # HomeMessanger joins auth_network as compose service `messanger` (external network from that stack).
   messanger: "http://messanger:8000"
-  # Qwen Image container `qwen-image` on qwen_image_gen_network (external; that stack creates the network).
+  # Qwen Image container `qwen-image`, owned by Switch-Service on models_network.
   qwen_image: "http://qwen-image:8000"
-  # llama.cpp server container `qwen38` on llm_network (one-off; not in this compose).
+  # llama.cpp server container `qwen38`, owned by Switch-Service on models_network.
   qwen38: "http://qwen38:4001"
   # RAG-Chat edge container `rag-edge` on rag_edge (external; the RAG-Chat stack creates the network).
   rag: "http://rag-edge:8080"
+  # Switch-Service control plane for the model containers. It runs on the host
+  # (it needs nvidia-smi and the rootless podman socket), and rootless podman
+  # exposes the host to containers as host.docker.internal.
+  switch: "http://host.docker.internal:8095"
 
 hosts:
   filenkov.store:
@@ -51,6 +55,20 @@ hosts:
       - match: /api/logout
         upstream: api
         auth: public
+      # Model service control (off / cpu / gpu) for the hub admin page. The
+      # routes must precede /api/*, which is session-scoped. X-Service-Token is
+      # the shared secret from .env: the browser never sees it and cannot
+      # override it, because the config value wins over the client header.
+      - match: /api/services
+        upstream: switch
+        auth: admin
+        headers:
+          X-Service-Token: "${SWITCH_TOKEN}"
+      - match: /api/services/*
+        upstream: switch
+        auth: admin
+        headers:
+          X-Service-Token: "${SWITCH_TOKEN}"
       - match: /api/me
         upstream: api
         auth: session
