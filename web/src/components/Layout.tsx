@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { useReadyModels } from '../hooks/useReadyModels'
 import { useScrollChrome } from '../hooks/useScrollChrome'
 import { isAdmin, serviceRole } from '../types'
 import { Owl } from './owl/Owl'
@@ -15,15 +16,15 @@ function Mark() {
 }
 
 /**
- * Service links (§7.1). Guests see Messanger / Storage / Hermes / RAG with a
- * lock rather than not at all: the gateway redirects an unauthenticated
- * navigation to
+ * Service links (§7.1). Guests see Storage / Hermes / RAG with a lock rather
+ * than not at all: the gateway redirects an unauthenticated navigation to
  * `/auth?return_to=…`, so clicking one is a working sign-in path. Admin and
  * Chat are hidden unless hub `global_role` is ADMIN, because advertising a
  * 403 is noise. Image is shown only for `image` FAMILY or ADMIN, never locked.
+ * Chat and Image also stay hidden unless Switch-Service reports that model
+ * ready (`llm` and `image`).
  */
 const services = [
-  { label: 'Messanger', href: 'https://messanger.filenkov.store' },
   { label: 'Storage', href: 'https://storage.filenkov.store' },
   { label: 'Hermes', href: 'https://hermes.filenkov.store' },
   { label: 'RAG', href: 'https://rag.filenkov.store' },
@@ -35,7 +36,8 @@ export function Layout() {
   const [departNonce, setDepartNonce] = useState(0)
   const admin = isAdmin(user)
   const imageRole = user ? serviceRole(user, 'image') : null
-  const image = imageRole === 'FAMILY' || imageRole === 'ADMIN'
+  const imageAllowed = imageRole === 'FAMILY' || imageRole === 'ADMIN'
+  const models = useReadyModels(admin || imageAllowed)
 
   useScrollChrome()
 
@@ -57,7 +59,7 @@ export function Layout() {
           <Mark />
           <span className="brand-name">Filenkov</span>
         </Link>
-        <nav className="service-nav" aria-label="Primary">
+        <nav className="service-nav" aria-label="Primary" data-model-lookup={models.status}>
           {services.map((service) => (
             <a
               key={service.label}
@@ -72,8 +74,8 @@ export function Layout() {
               )}
             </a>
           ))}
-          {image ? <a href="https://image.filenkov.store">Image</a> : null}
-          {admin ? <a href="https://llm.filenkov.store">Chat</a> : null}
+          {imageAllowed && models.image ? <a href="https://image.filenkov.store">Image</a> : null}
+          {admin && models.llm ? <a href="https://llm.filenkov.store">Chat</a> : null}
           {admin ? <Link to="/admin">Admin</Link> : null}
         </nav>
         <div className="header-right">

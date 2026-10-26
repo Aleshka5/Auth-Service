@@ -122,6 +122,7 @@ hosts:
 }
 
 func TestLoadDefaultYAML(t *testing.T) {
+	t.Setenv("SWITCH_TOKEN", "test-token")
 	path := filepath.Join("..", "..", "deploy", "gateway.yaml")
 	f, err := LoadFile(path)
 	if err != nil {
@@ -251,6 +252,18 @@ func TestLoadDefaultYAML(t *testing.T) {
 	_, rt, ok = r.Match("filenkov.store", "/api/logout")
 	if !ok || rt.auth != PolicyPublic {
 		t.Fatalf("logout: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/api/services")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "switch" || rt.match != "/api/services" {
+		t.Fatalf("GET /api/services must be a session read of switch: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodPost, "/api/services")
+	if !ok || rt.auth != PolicyAdmin || rt.upstreamName != "switch" {
+		t.Fatalf("non-GET /api/services must stay admin: ok=%v %+v", ok, rt)
+	}
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodPost, "/api/services/llm/state")
+	if !ok || rt.auth != PolicyAdmin || rt.upstreamName != "switch" || rt.match != "/api/services/*" {
+		t.Fatalf("service control must stay admin: ok=%v %+v", ok, rt)
 	}
 	_, rt, ok = r.Match("filenkov.store", "/users/by-google-sub/abc")
 	if !ok || rt.auth != PolicyReject {

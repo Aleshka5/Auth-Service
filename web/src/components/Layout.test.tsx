@@ -40,14 +40,58 @@ async function mascot(clip: string) {
 
 const FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
 
+type ModelKind = 'ready' | 'off' | 'unhealthy'
+
+function servicesBody(models: Record<string, ModelKind>) {
+  return {
+    host: {
+      ram: { total_mib: 1, used_mib: 0, reserve_mib: 0, budget_mib: 1, claimed_mib: 0, free_mib: 1 },
+      vram: null,
+    },
+    services: Object.entries(models).map(([id, kind]) => ({
+      id,
+      title: id,
+      state: kind === 'off' ? 'off' : 'ready',
+      mode: kind === 'off' ? null : 'gpu',
+      desired_state: kind === 'off' ? 'off' : 'gpu',
+      busy: false,
+      claim: { ram_mib: 1, vram_mib: 1 },
+      health: { ok: kind === 'ready' },
+    })),
+  }
+}
+
+/** `/api/me` returns `me`; `/api/services` returns the model map. Other URLs fall through to `onOther`. */
+function stubSession(
+  me: unknown,
+  models: Record<string, ModelKind> = {},
+  status = 200,
+  onOther?: (url: string, init?: RequestInit) => Response | Promise<Response>,
+) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url === '/api/services') return jsonResponse(servicesBody(models))
+    if (url === '/api/me') return jsonResponse(me, status)
+    if (onOther) return onOther(url, init)
+    return jsonResponse({ error: 'unexpected ' + url }, 500)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+async function lookupKnown() {
+  await waitFor(() => {
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toHaveAttribute('data-model-lookup', 'known')
+  })
+}
+
 describe('Layout', () => {
   it('shows Sign in and locked service links for anonymous users', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'unauthorized' }, 401)))
+    const fetchMock = stubSession({ error: 'unauthorized' }, {}, 401)
     renderLayout()
     expect(await screen.findByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/auth')
 
     for (const [label, href] of [
-      ['Messanger', 'https://messanger.filenkov.store'],
       ['Storage', 'https://storage.filenkov.store'],
       ['Hermes', 'https://hermes.filenkov.store'],
       ['RAG', 'https://rag.filenkov.store'],
@@ -58,45 +102,91 @@ describe('Layout', () => {
       expect(link.querySelector('.service-lock')).not.toBeNull()
     }
 
+    expect(screen.queryByRole('link', { name: 'Messanger' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toHaveAttribute('data-model-lookup', 'idle')
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/services')).toBe(false)
   })
 
-  it('shows the name, Admin, Chat, and unlocked services for admins', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(admin)))
+  it('shows the name, Admin, Chat, and unlocked services for admins when llm is ready', async () => {
+    stubSession(admin, { llm: 'ready' })
     renderLayout()
     expect(await screen.findByText('Boss')).toBeInTheDocument()
+    await lookupKnown()
     expect(screen.getByRole('link', { name: 'Admin' })).toHaveAttribute('href', '/admin')
     expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', 'https://llm.filenkov.store')
     expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', 'https://hermes.filenkov.store')
+    expect(screen.queryByRole('link', { name: 'Messanger' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
     expect(document.querySelectorAll('.service-lock')).toHaveLength(0)
   })
 
-  it('shows services but not Admin for signed-in non-admins', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(stranger)))
+  it.each(['off', 'unhealthy'] as const)('hides Chat for an admin when llm is %s', async (kind) => {
+    stubSession(admin, { llm: kind })
     renderLayout()
-    expect(await screen.findByText('Ann')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', 'https://hermes.filenkov.store')
-    expect(screen.getByRole('link', { name: 'Messanger' })).not.toHaveAttribute('title')
-    expect(screen.getByRole('link', { name: 'RAG' })).not.toHaveAttribute('title')
-    expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
+    expect(await screen.findByText('Boss')).toBeInTheDocument()
+    await lookupKnown()
+    expect(screen.getByRole('link', { name: 'Admin' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
   })
 
-  it.each(['FAMILY', 'ADMIN'] as const)('shows an unlocked Image link for image %s', async (role) => {
-    const person: User = { ...stranger, services: [...stranger.services, { service: 'image', role }] }
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(person)))
+  it('hides Chat when Switch-Service cannot be read', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/services') return jsonResponse({ error: 'unavailable' }, 503)
+        return jsonResponse(admin)
+      }),
+    )
+    renderLayout()
+    expect(await screen.findByText('Boss')).toBeInTheDocument()
+    await lookupKnown()
+    expect(screen.getByRole('link', { name: 'Admin' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
+  })
+
+  it('shows services but not Admin or Chat for signed-in non-admins', async () => {
+    const fetchMock = stubSession(stranger, { llm: 'ready', image: 'ready' })
     renderLayout()
     expect(await screen.findByText('Ann')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Hermes' })).toHaveAttribute('href', 'https://hermes.filenkov.store')
+    expect(screen.getByRole('link', { name: 'Storage' })).not.toHaveAttribute('title')
+    expect(screen.getByRole('link', { name: 'RAG' })).not.toHaveAttribute('title')
+    expect(screen.queryByRole('link', { name: 'Messanger' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toHaveAttribute('data-model-lookup', 'idle')
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/services')).toBe(false)
+  })
+
+  it.each(['FAMILY', 'ADMIN'] as const)('shows an unlocked Image link for image %s when the model is ready', async (role) => {
+    const person: User = { ...stranger, services: [...stranger.services, { service: 'image', role }] }
+    stubSession(person, { image: 'ready', llm: 'ready' })
+    renderLayout()
+    expect(await screen.findByText('Ann')).toBeInTheDocument()
+    await lookupKnown()
     const link = screen.getByRole('link', { name: 'Image' })
     expect(link).toHaveAttribute('href', 'https://image.filenkov.store')
     expect(link).not.toHaveAttribute('title')
     expect(link.querySelector('.service-lock')).toBeNull()
     expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument()
-    for (const label of ['Messanger', 'Storage', 'Hermes', 'RAG']) {
+    for (const label of ['Storage', 'Hermes', 'RAG']) {
       expect(screen.getByRole('link', { name: label })).not.toHaveAttribute('title')
     }
+  })
+
+  it.each(['off', 'unhealthy'] as const)('hides Image when the model is %s', async (kind) => {
+    const person: User = {
+      ...stranger,
+      services: [...stranger.services, { service: 'image', role: 'FAMILY' }],
+    }
+    stubSession(person, { image: kind })
+    renderLayout()
+    expect(await screen.findByText('Ann')).toBeInTheDocument()
+    await lookupKnown()
+    expect(screen.queryByRole('link', { name: 'Image' })).not.toBeInTheDocument()
   })
 
   it.each([
@@ -105,9 +195,10 @@ describe('Layout', () => {
     ['BLOCKED', [{ service: 'image', role: 'BLOCKED' }]],
   ] as const)('hides Image for image %s', async (_, rows) => {
     const person: User = { ...admin, services: [...rows] }
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(person)))
+    stubSession(person, { llm: 'ready', image: 'ready' })
     renderLayout()
     expect(await screen.findByText('Boss')).toBeInTheDocument()
+    await lookupKnown()
     expect(screen.getByRole('link', { name: 'Admin' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', 'https://llm.filenkov.store')
     expect(screen.getByRole('link', { name: 'Storage' })).toBeInTheDocument()
@@ -115,7 +206,7 @@ describe('Layout', () => {
   })
 
   it('hides Image from guests', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'unauthorized' }, 401)))
+    stubSession({ error: 'unauthorized' }, { image: 'ready' }, 401)
     renderLayout()
     expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Hermes' })).toBeInTheDocument()

@@ -51,10 +51,20 @@ hosts:
       - match: /api/logout
         upstream: api
         auth: public
-      # Model service control (off / cpu / gpu) for the hub admin page. The
-      # routes must precede /api/*, which is session-scoped. X-Service-Token is
-      # the shared secret from .env: the browser never sees it and cannot
-      # override it, because the config value wins over the client header.
+      # Model service control (off / cpu / gpu). These routes must precede
+      # /api/*, which is session-scoped. X-Service-Token is the shared secret
+      # from .env: the browser never sees it and cannot override it, because
+      # the config value wins over the client header.
+      # GET is session so the hub header can ask whether image and llm are
+      # ready. Image is granted by the image role, which is not hub ADMIN, so
+      # an admin-only read would hide that link from everyone allowed to use it.
+      # Switching a service stays admin, on the exact path and on /api/services/*.
+      - match: /api/services
+        methods: [GET]
+        upstream: switch
+        auth: session
+        headers:
+          X-Service-Token: "${SWITCH_TOKEN}"
       - match: /api/services
         upstream: switch
         auth: admin
