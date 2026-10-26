@@ -25,7 +25,7 @@ function Mark() {
 const services = [
   { label: 'Messanger', href: 'https://messanger.filenkov.store' },
   { label: 'Storage', href: 'https://storage.filenkov.store' },
-  { label: 'Hermes', href: '/hermes/chat' },
+  { label: 'Hermes', href: 'https://hermes.filenkov.store' },
   { label: 'RAG', href: 'https://rag.filenkov.store' },
 ] as const
 

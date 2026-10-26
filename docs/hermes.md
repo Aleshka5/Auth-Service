@@ -1,5 +1,7 @@
 # Hermes behind the Auth Gateway
 
+> **Retired (2026-10-23).** The `/hermes` mount is gone from `deploy/gateway.yaml`: `upstreams.hermes`, the `/hermes`, `/hermes/login`, `/hermes/*` routes and the `/chat`, `/sessions` redirects were removed, because no container named `hermes` runs on master-node and every one of those paths answered 502. The dashboard is served on its own host, `https://hermes.filenkov.store` (Caddy → `localhost:9119`), and the SPA nav link points there. `hermes_prefix.go` and its unit tests stay in the tree for the day a `hermes` container is deployed again; this document is kept as the record of how the mount worked.
+
 Public URL: `https://filenkov.store/hermes/`. There is **one** login: hub Google. Hermes does not show a password page.
 
 Sibling plugin: [`hermes-auth-gateway/plugins/auth-gateway`](../../hermes-auth-gateway/plugins/auth-gateway). Caddy site file: [`deploy/Caddyfile.filenkov`](../deploy/Caddyfile.filenkov).

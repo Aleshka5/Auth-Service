@@ -1,6 +1,6 @@
 # Change Request: Messenger host `messanger.filenkov.store` (Auth Gateway)
 
-> **Status:** **Shipped.** `deploy/gateway.yaml` carries `upstreams.messanger`, the `messanger.filenkov.store` host block, and the hub `/users/by-email/*` reject; covered by `internal/gateway/config_test.go` and `internal/gateway/handler_test.go` (`TestUserServiceCreateAndGoogleSubRejected` → `TestUserServiceCreateAndLookupRejected`). Config + tests only — no gateway code change. The rest of this document is the historical record of the request.
+> **Status:** **Reverted (2026-10-23).** `upstreams.messanger`, the `messanger.filenkov.store` host block and its tests were removed from `deploy/gateway.yaml` / `config_test.go` / `auth-gateway.md`: there is no messenger container on master-node and no Caddy site, so the host only produced a TLS error. The `/users/by-email/*` and `POST /users` rejects stay — they are hub hardening, not messenger-specific. The rest of this document is the historical record of the request; to bring the host back, restore the block and add the Caddy site first.
 > **Repos:** Auth-Service only (`deploy/gateway.yaml` + gateway tests). **Config change, not code** — the gateway already supports everything this needs.
 > **Requester:** HomeMessanger (Python/FastAPI 1-to-1 messenger, compose service `messanger`, listen `:8000`, unpublished).
 > **Does not** touch Auth API, the SPA, Redis, User-Service, or the JWT contract. No migration. No new auth mode.

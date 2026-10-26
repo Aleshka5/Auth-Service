@@ -4,9 +4,8 @@ export default function HermesNode() {
   return (
     <>
       <p className="lede">
-        An agent dashboard running on a path under the hub, at{' '}
-        <strong>filenkov.store/hermes/chat</strong>. You can see this page because you are signed in; a
-        guest is not shown it at all.
+        An agent dashboard on its own host, at <strong>hermes.filenkov.store</strong>. You can see this
+        page because you are signed in; a guest is not shown it at all.
       </p>
       <p>
         Unlike the other projects on this branch, Hermes is not something I wrote — it is a dashboard I
@@ -15,10 +14,11 @@ export default function HermesNode() {
         Google sign-in at the hub, and every service on the domain accepts it.
       </p>
       <p>
-        The gateway does that by routing <strong>/hermes/*</strong> as a session route, injecting the
-        access JWT as a Bearer token and telling the app it is mounted under a prefix, so its own auth
-        plugin verifies the hub’s token rather than issuing one. Its login route redirects into the app
-        instead of asking for a password, and the service itself is never published on a public interface.
+        The gateway used to do that by routing <strong>/hermes/*</strong> as a session route, injecting the
+        access JWT as a Bearer token and telling the app it was mounted under a prefix, so its own auth
+        plugin verified the hub’s token rather than issuing one. That mount was retired in October 2026 in
+        favour of this dedicated host; the dashboard keeps the same plugin, and it is still never published
+        on a public interface.
       </p>
       <p>
         The chat page is the interesting exception. It is a terminal, so it is not ordinary HTTP: the

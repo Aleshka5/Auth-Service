@@ -17,12 +17,8 @@ upstreams:
   api: "http://api:8000"
   web: "http://web:80"
   user_service: "http://user_service:8000"
-  # Hermes container on auth_network (hermes-auth-gateway/docker-compose.yml).
-  hermes: "http://hermes:8787"
   # WebStorage joins auth_network as compose service `app` (external network from that stack).
   storage: "http://app:8000"
-  # HomeMessanger joins auth_network as compose service `messanger` (external network from that stack).
-  messanger: "http://messanger:8000"
   # Qwen Image container `qwen-image`, owned by Switch-Service on models_network.
   qwen_image: "http://qwen-image:8000"
   # llama.cpp server container `qwen38`, owned by Switch-Service on models_network.
@@ -94,29 +90,9 @@ hosts:
       - match: /health
         upstream: api
         auth: public
-      # Any signed-in user: docs/hermes.md. JWT plugin verifies injected Bearer.
-      - match: /hermes
-        upstream: hermes
-        auth: session
-        strip_prefix: /hermes
-        inject_access_jwt: true
-      - match: /hermes/login
-        methods: [GET]
-        auth: session
-        redirect: /hermes/sessions
-      - match: /hermes/*
-        upstream: hermes
-        auth: session
-        strip_prefix: /hermes
-        inject_access_jwt: true
-      - match: /chat
-        methods: [GET]
-        auth: session
-        redirect: /hermes/chat
-      - match: /sessions
-        methods: [GET]
-        auth: session
-        redirect: /hermes/sessions
+      # Signed-in dashboard moved to its own host (https://hermes.filenkov.store); the
+      # /hermes/* mount and the /chat, /sessions redirects were removed. Everything under
+      # /* now reaches the hub SPA instead of a dead upstream.
       - match: /admin
         upstream: web
         auth: admin
@@ -138,21 +114,6 @@ hosts:
         auth: public
       - match: /*
         upstream: storage
-        auth: session
-
-  messanger.filenkov.store:
-    role_field: global_role
-    # Attachment uploads need a generous response-header timeout (it does not cap the request body).
-    timeouts:
-      proxy: 5m
-    routes:
-      # First match wins, so /health must precede the catch-all.
-      - match: /health
-        upstream: messanger
-        auth: public
-      # The catch-all serves both /api/* and the SPA.
-      - match: /*
-        upstream: messanger
         auth: session
 
   image.filenkov.store:

@@ -58,8 +58,8 @@ export const architectureSolutions: ArchitectureSolution[] = [
     slug: 'hermes',
     title: 'Hermes',
     summary:
-      'Agent workspace on :8787. The gateway injects Authorization: Bearer with the same access JWT, so there is no second login. Talks to MLflow and LiteLLM.',
-    href: '/hermes/sessions',
+      'Agent workspace on its own host, hermes.filenkov.store, behind the same Auth-Service JWT rather than a second password. Talks to MLflow and LiteLLM.',
+    href: 'https://hermes.filenkov.store',
   },
   {
     slug: 'llm',

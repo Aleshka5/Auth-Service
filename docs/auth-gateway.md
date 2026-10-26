@@ -11,7 +11,7 @@ and injects identity. Caddy keeps TLS only.
 - Identity is propagated as `X-Auth-*` headers.
 - `GET /users` is hub-admin-only. `POST /users` stays rejected at the edge.
 - No gRPC. No Auth Postgres. `WHITELIST_JSON` is gone.
-- The live hosts are `filenkov.store`, `storage.filenkov.store`, `messanger.filenkov.store`, `image.filenkov.store`, `llm.filenkov.store`, and `rag.filenkov.store`; add the others later.
+- The live hosts are `filenkov.store`, `storage.filenkov.store`, `image.filenkov.store`, `llm.filenkov.store`, and `rag.filenkov.store`; add the others later. `messanger.filenkov.store` and the `/hermes` mount were removed in October 2026 (see `docs/hermes.md`).
 
 ## Non-goals
 
@@ -30,15 +30,13 @@ Browser
   -> api:8000         filenkov.store /api, /oauth, /health
   -> web:80           filenkov.store SPA + /admin
   -> user_service:8000  /users* (X-User-Id; no Cookie/JWT)
-  -> hermes:8787      filenkov.store/hermes/* (X-Forwarded-Prefix + Bearer JWT)
   -> app:8000         storage.filenkov.store (X-Auth-* + X-User-Id + X-Storage-Role)
-  -> messanger:8000   messanger.filenkov.store (X-Auth-*; Cookie forwarded)
   -> qwen-image:8000  image.filenkov.store (X-Auth-*; Cookie forwarded)
   -> qwen38:4001      llm.filenkov.store (X-Auth-*)
   -> rag-edge:8080    rag.filenkov.store (X-Auth-*; Cookie forwarded)
 ```
 
-Hermes and storage/messanger sit on `auth_network`; User-Service on external
+Storage sits on `auth_network`; User-Service on external
 `user_network`; Qwen Image on external `models_network`; llama.cpp
 (`qwen38`) on external `models_network` (both owned by Switch-Service); RAG-Chat (`rag-edge`) on external `rag_edge`.
 
@@ -62,9 +60,7 @@ upstreams:
   api: "http://api:8000"
   web: "http://web:80"
   user_service: "http://user_service:8000"
-  hermes: "http://hermes:8787"
   storage: "http://app:8000"
-  messanger: "http://messanger:8000"
   qwen_image: "http://qwen-image:8000"
   qwen38: "http://qwen38:4001"
   rag: "http://rag-edge:8080"
@@ -102,24 +98,6 @@ hosts:
       - match: /health
         upstream: api
         auth: public
-      - match: /hermes
-        upstream: hermes
-        auth: session
-        strip_prefix: /hermes
-        inject_access_jwt: true
-      - match: /hermes/*
-        upstream: hermes
-        auth: session
-        strip_prefix: /hermes
-        inject_access_jwt: true
-      - match: /chat
-        methods: [GET]
-        auth: session
-        redirect: /hermes/chat
-      - match: /sessions
-        methods: [GET]
-        auth: session
-        redirect: /hermes/sessions
       - match: /admin
         upstream: web
         auth: admin
@@ -140,18 +118,6 @@ hosts:
         auth: public
       - match: /*
         upstream: storage
-        auth: session
-
-  messanger.filenkov.store:
-    role_field: global_role
-    timeouts:
-      proxy: 5m
-    routes:
-      - match: /health
-        upstream: messanger
-        auth: public
-      - match: /*
-        upstream: messanger
         auth: session
 
   image.filenkov.store:
@@ -214,10 +180,7 @@ First matching route wins. Put specific prefixes first.
    `X-Storage-Role` from `GET /users/{sub}/roles/storage`.
    - 5xx / timeout → 503, no proxy
    - 404 user → 401
-7. For Hermes: set `X-Forwarded-Prefix: /hermes` and
-   `Authorization: Bearer <access JWT>` (`inject_access_jwt: true`); the
-   `auth-gateway` plugin verifies the JWT with the shared `JWT_SECRET`.
-8. For all other non–User-Service upstreams: inject identity headers (below)
+7. For all other non–User-Service upstreams: inject identity headers (below)
    from the access JWT.
 
 ## Identity headers
@@ -250,7 +213,7 @@ logout. User-Service role changes to `BLOCKED` should set `rejected:user:{uuid}`
 
 Hosts in the YAML are the allowlist (https in production). No `WHITELIST_JSON`.
 The list sets the JWT `aud`: `filenkov.store` (hub) plus `storage.filenkov.store`,
-`messanger.filenkov.store`, `image.filenkov.store`, `llm.filenkov.store`, and
+`image.filenkov.store`, `llm.filenkov.store`, and
 `rag.filenkov.store`.
 
 ## Caddy
@@ -263,7 +226,7 @@ The list sets the JWT `aud`: `filenkov.store` (hub) plus `storage.filenkov.store
 - `Strict-Transport-Security` and friends; WebSocket `@notWebsocket` handling
 - `protocols h1 h2` in the global options (HTTP/3 breaks Hermes PTY WS)
 
-Caddy does not know about `/oauth`, `/admin`, `/hermes`, or `/users`.
+Caddy does not know about `/oauth`, `/admin`, or `/users`.
 
 ## Go layout
 
@@ -317,13 +280,11 @@ internal/gateway/
 - Unit: `rejected:jti` → 401; `rejected:user` / `global_role==BLOCKED` → 403.
 - Unit: User-Service route strips Cookie/JWT and sets `X-User-Id`; storage 5xx → 503;
   storage 404 → 401.
-- Unit: Hermes route sets `X-Forwarded-Prefix` + Bearer access JWT.
 - Unit: incoming `X-Auth-*` is stripped before proxy.
 - Unit: rate limit 429 after N hits.
 - Integration (podman): compose up, `curl` gateway `/healthz`, proxy `/` to web,
-  `/oauth` to api, and `/hermes` with a test JWT.
+  `/oauth` to api.
 - `curl` with the Host header for the storage.filenkov.store route reaches app:8000 (public `GET /health`, session catch-all) — the route is now live.
-- `curl` with the Host header for the messanger.filenkov.store route reaches messanger:8000 (public `GET /health`, catch-all session), and TestLoadDefaultYAML asserts the messanger host and its 5m proxy timeout.
 - `curl` with the Host header for the rag.filenkov.store route reaches rag-edge:8080 (public `GET /health`, catch-all session), and TestLoadDefaultYAML asserts the rag host, its 5m proxy timeout, and the return_to allowlist entry.
 
 ## Rollout

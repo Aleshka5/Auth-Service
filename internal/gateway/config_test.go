@@ -139,16 +139,12 @@ func TestLoadDefaultYAML(t *testing.T) {
 	}
 	foundStorage := false
 	foundLLM := false
-	foundMessanger := false
 	for _, n := range names {
 		if n == "storage.filenkov.store" {
 			foundStorage = true
 		}
 		if n == "llm.filenkov.store" {
 			foundLLM = true
-		}
-		if n == "messanger.filenkov.store" {
-			foundMessanger = true
 		}
 	}
 	if !foundStorage {
@@ -157,8 +153,10 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if !foundLLM {
 		t.Fatal("llm.filenkov.store must be enabled")
 	}
-	if !foundMessanger {
-		t.Fatal("messanger.filenkov.store must be enabled")
+	for _, n := range names {
+		if n == "messanger.filenkov.store" {
+			t.Fatal("messanger.filenkov.store must stay removed: no container, no Caddy site")
+		}
 	}
 	foundImage := false
 	foundRAG := false
@@ -188,11 +186,11 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if got := f.Upstreams["storage"]; got != "http://app:8000" {
 		t.Fatalf("storage upstream %q", got)
 	}
-	if got := f.Upstreams["messanger"]; got != "http://messanger:8000" {
-		t.Fatalf("messanger upstream %q", got)
+	if _, ok := f.Upstreams["messanger"]; ok {
+		t.Fatal("messanger upstream must stay removed: no container, no Caddy site")
 	}
-	if got := f.Upstreams["hermes"]; got != "http://hermes:8787" {
-		t.Fatalf("hermes upstream %q", got)
+	if _, ok := f.Upstreams["hermes"]; ok {
+		t.Fatal("hermes upstream must stay removed: the /hermes mount is gone, the dashboard has its own host")
 	}
 	if got := f.Upstreams["qwen38"]; got != "http://qwen38:4001" {
 		t.Fatalf("qwen38 upstream %q", got)
@@ -204,29 +202,28 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The /hermes mount and the /chat, /sessions redirects were removed: the dashboard is
+	// served on its own host (https://hermes.filenkov.store), so these paths must fall
+	// through to the hub SPA instead of a dead upstream.
 	h, rt, ok := r.Match("filenkov.store", "/hermes/x")
-	if !ok || rt.auth != PolicySession || rt.stripPrefix != "/hermes" || rt.upstreamName != "hermes" || !rt.injectAccessJWT {
-		t.Fatalf("hermes route: ok=%v %+v", ok, rt)
+	if !ok || rt.upstreamName != "web" || rt.match != "/*" {
+		t.Fatalf("/hermes/* must fall through to the hub SPA: ok=%v %+v", ok, rt)
 	}
-	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/chat")
-	if !ok || rt.redirect != "/hermes/chat" || rt.auth != PolicySession {
-		t.Fatalf("chat redirect: ok=%v %+v", ok, rt)
-	}
-	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/sessions")
-	if !ok || rt.redirect != "/hermes/sessions" || rt.auth != PolicySession {
-		t.Fatalf("sessions redirect: ok=%v %+v", ok, rt)
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/hermes")
+	if !ok || rt.upstreamName != "web" || rt.redirect != "" {
+		t.Fatalf("/hermes must fall through to the hub SPA: ok=%v %+v", ok, rt)
 	}
 	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/hermes/login")
-	if !ok || rt.redirect != "/hermes/sessions" || rt.auth != PolicySession {
-		t.Fatalf("hermes login skip: ok=%v %+v", ok, rt)
+	if !ok || rt.upstreamName != "web" || rt.redirect != "" {
+		t.Fatalf("/hermes/login must not redirect to a removed mount: ok=%v %+v", ok, rt)
 	}
-	_, rt, ok = r.Match("filenkov.store", "/hermes")
-	if !ok || rt.auth != PolicySession || rt.upstreamName != "hermes" {
-		t.Fatalf("hermes exact: ok=%v %+v", ok, rt)
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/chat")
+	if !ok || rt.redirect != "" || rt.upstreamName != "web" {
+		t.Fatalf("/chat redirect must be gone: ok=%v %+v", ok, rt)
 	}
-	_, rt, ok = r.Match("filenkov.store", "/hermes/")
-	if !ok || rt.auth != PolicySession || rt.upstreamName != "hermes" {
-		t.Fatalf("hermes slash: ok=%v %+v", ok, rt)
+	_, rt, ok = r.MatchMethod("filenkov.store", http.MethodGet, "/sessions")
+	if !ok || rt.redirect != "" || rt.upstreamName != "web" {
+		t.Fatalf("/sessions redirect must be gone: ok=%v %+v", ok, rt)
 	}
 	if h.roleField != "global_role" {
 		t.Fatalf("hub role_field %q", h.roleField)
@@ -293,23 +290,8 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if h.proxyTimeout != 30*time.Minute {
 		t.Fatalf("storage proxy timeout %v", h.proxyTimeout)
 	}
-	h, rt, ok = r.Match("messanger.filenkov.store", "/health")
-	if !ok || rt.auth != PolicyPublic || rt.upstreamName != "messanger" || rt.match != "/health" {
-		t.Fatalf("messanger health: ok=%v %+v", ok, rt)
-	}
-	h, rt, ok = r.Match("messanger.filenkov.store", "/api/me")
-	if !ok || rt.auth != PolicySession || rt.upstreamName != "messanger" || rt.match != "/*" {
-		t.Fatalf("messanger api must fall through to the catch-all: ok=%v %+v", ok, rt)
-	}
-	h, rt, ok = r.Match("messanger.filenkov.store", "/")
-	if !ok || rt.auth != PolicySession || rt.upstreamName != "messanger" || rt.match != "/*" {
-		t.Fatalf("messanger catch-all: ok=%v %+v", ok, rt)
-	}
-	if h.roleField != "global_role" {
-		t.Fatalf("messanger role_field %q", h.roleField)
-	}
-	if h.proxyTimeout != 5*time.Minute {
-		t.Fatalf("messanger proxy timeout %v", h.proxyTimeout)
+	if _, _, ok := r.Match("messanger.filenkov.store", "/"); ok {
+		t.Fatal("messanger.filenkov.store must not be routed: no container and no Caddy site")
 	}
 	h, rt, ok = r.Match("llm.filenkov.store", "/")
 	if !ok || rt.auth != PolicyAdmin || rt.upstreamName != "qwen38" || rt.injectAccessJWT {
@@ -367,8 +349,8 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if _, ok := m["llm.filenkov.store"]; !ok {
 		t.Fatal("return_to allowlist must include llm.filenkov.store")
 	}
-	if _, ok := m["messanger.filenkov.store"]; !ok {
-		t.Fatal("return_to allowlist must include messanger.filenkov.store")
+	if _, ok := m["messanger.filenkov.store"]; ok {
+		t.Fatal("return_to allowlist must not offer messanger.filenkov.store: the host is not routed")
 	}
 	if _, ok := m["rag.filenkov.store"]; !ok {
 		t.Fatal("return_to allowlist must include rag.filenkov.store")
