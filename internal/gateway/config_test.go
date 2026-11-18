@@ -199,6 +199,9 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if got := f.Upstreams["rag"]; got != "http://rag-edge:8080" {
 		t.Fatalf("rag upstream %q", got)
 	}
+	if got := f.Upstreams["grafana"]; got != "http://grafana:3000" {
+		t.Fatalf("grafana upstream %q", got)
+	}
 	r, err := f.Router()
 	if err != nil {
 		t.Fatal(err)
@@ -352,7 +355,45 @@ func TestLoadDefaultYAML(t *testing.T) {
 	if h.proxyTimeout != 5*time.Minute {
 		t.Fatalf("rag proxy timeout %v", h.proxyTimeout)
 	}
+	h, rt, ok = r.Match("observer.filenkov.store", "/api/health")
+	if !ok || rt.auth != PolicyPublic || rt.upstreamName != "grafana" || rt.match != "/api/health" {
+		t.Fatalf("observer health: ok=%v %+v", ok, rt)
+	}
+	h, rt, ok = r.Match("observer.filenkov.store", "/d/host-overview")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "grafana" || rt.match != "/*" {
+		t.Fatalf("observer catch-all: ok=%v %+v", ok, rt)
+	}
+	if h.roleField != "global_role" {
+		t.Fatalf("observer role_field %q", h.roleField)
+	}
+	if h.proxyTimeout != 5*time.Minute {
+		t.Fatalf("observer proxy timeout %v", h.proxyTimeout)
+	}
+	// meet.filenkov.store: Jitsi's own signaling/data WebSockets must reach the web
+	// container through the session catch-all; a route that answered 401/302 for
+	// /xmpp-websocket would leave the UI loading and every call dead.
+	h, rt, ok = r.Match("meet.filenkov.store", "/xmpp-websocket")
+	if !ok || rt.auth != PolicySession || rt.upstreamName != "jitsi_web" || rt.match != "/*" {
+		t.Fatalf("meet websocket must fall through to the session catch-all: ok=%v %+v", ok, rt)
+	}
+	if h.roleField != "global_role" {
+		t.Fatalf("meet role_field %q", h.roleField)
+	}
+	if h.proxyTimeout != 5*time.Minute {
+		t.Fatalf("meet proxy timeout %v", h.proxyTimeout)
+	}
+	// The browser intersects this header with Caddy's copy, so a missing
+	// microphone/camera grant here silences every call even with a good route.
+	if !strings.Contains(h.permissionsPolicy, "microphone=(self)") || !strings.Contains(h.permissionsPolicy, "camera=(self)") {
+		t.Fatalf("meet permissions policy must allow camera and microphone: %q", h.permissionsPolicy)
+	}
 	m := f.AllowedHostsMap()
+	if _, ok := m["meet.filenkov.store"]; !ok {
+		t.Fatal("return_to allowlist must include meet.filenkov.store")
+	}
+	if _, ok := m["observer.filenkov.store"]; !ok {
+		t.Fatal("return_to allowlist must include observer.filenkov.store")
+	}
 	if _, ok := m["image.filenkov.store"]; !ok {
 		t.Fatal("return_to allowlist must include image.filenkov.store")
 	}

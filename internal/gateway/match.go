@@ -41,6 +41,16 @@ func (r *Router) Match(host, path string) (*compiledHost, *compiledRoute, bool) 
 	return r.MatchMethod(host, "", path)
 }
 
+// HostBlock returns the compiled block for a Host header, or nil for an unknown host.
+// Used by the response-header layer, which runs before routing and still needs the
+// host's own policy.
+func (r *Router) HostBlock(host string) *compiledHost {
+	if r == nil {
+		return nil
+	}
+	return r.hosts[hostname(host)]
+}
+
 // MatchMethod is Match with an HTTP method filter (empty method matches any).
 func (r *Router) MatchMethod(host, method, path string) (*compiledHost, *compiledRoute, bool) {
 	if r == nil {

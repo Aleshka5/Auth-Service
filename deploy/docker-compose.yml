@@ -112,6 +112,9 @@ services:
       - models_network
       # rag.filenkov.store upstream http://rag-edge:8080.
       - rag_edge
+      # observer.filenkov.store upstream http://grafana:3000 (Common observability
+      # stack, ~/projects/Common/observability, container name `grafana`).
+      - common_network
 
 networks:
   auth_network:
@@ -123,4 +126,6 @@ networks:
   models_network:
     external: true
   rag_edge:
+    external: true
+  common_network:
     external: true

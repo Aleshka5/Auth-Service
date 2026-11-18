@@ -80,7 +80,7 @@ func (s *Server) Handler() http.Handler {
 	h = s.withSecurityHeaders(h)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isWebSocketRequest(r) {
-			applySecurityHeaders(w.Header(), !s.cfg.DevHTTP)
+			applySecurityHeaders(w.Header(), !s.cfg.DevHTTP, s.permissionsPolicyFor(r.Host))
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/healthz" && !s.hostOwnsHealthz(r.Host) {
 			s.handleHealthz(w, r)
@@ -219,7 +219,7 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isWebSocketRequest(r) {
-			applySecurityHeaders(w.Header(), !s.cfg.DevHTTP)
+			applySecurityHeaders(w.Header(), !s.cfg.DevHTTP, s.permissionsPolicyFor(r.Host))
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -306,7 +306,15 @@ func (s *Server) newProxy() *httputil.ReverseProxy {
 			if resp != nil && resp.StatusCode == http.StatusSwitchingProtocols {
 				return nil
 			}
-			applySecurityHeaders(resp.Header, !s.cfg.DevHTTP)
+			// `t` is not in scope here (the Rewrite closure re-reads it from the request);
+			// the host's own Permissions-Policy comes from the target again.
+			policy := ""
+			if resp != nil && resp.Request != nil {
+				if t, ok := resp.Request.Context().Value(proxyTargetKey).(proxyTarget); ok {
+					policy = t.hostPermissionsPolicy()
+				}
+			}
+			applySecurityHeaders(resp.Header, !s.cfg.DevHTTP, policy)
 			s.maybeRejectTargetUser(resp)
 			if resp != nil && resp.Request != nil {
 				if t, ok := resp.Request.Context().Value(proxyTargetKey).(proxyTarget); ok && hermesStripPrefix(t) {
@@ -352,14 +360,38 @@ func isWebSocketRequest(r *http.Request) bool {
 	return r != nil && strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
 }
 
-func applySecurityHeaders(h http.Header, hsts bool) {
+// defaultPermissionsPolicy is the strict policy every host gets unless its block sets
+// `permissions_policy`. Kept as a named constant so the override is visibly the exception.
+const defaultPermissionsPolicy = "camera=(), microphone=(), geolocation=()"
+
+func applySecurityHeaders(h http.Header, hsts bool, permissionsPolicy string) {
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	if permissionsPolicy == "" {
+		permissionsPolicy = defaultPermissionsPolicy
+	}
+	h.Set("Permissions-Policy", permissionsPolicy)
 	if hsts {
 		h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 	}
+}
+
+// permissionsPolicyFor resolves the host's own Permissions-Policy (the Host header is
+// enough: the header layer runs before routing). Unknown host → the strict default.
+func (s *Server) permissionsPolicyFor(hostHeader string) string {
+	if ch := s.router.HostBlock(hostHeader); ch != nil {
+		return ch.permissionsPolicy
+	}
+	return ""
+}
+
+// hostPermissionsPolicy is the same lookup from an already-resolved proxy target.
+func (t proxyTarget) hostPermissionsPolicy() string {
+	if t.host == nil {
+		return ""
+	}
+	return t.host.permissionsPolicy
 }
 
 func clientIP(r *http.Request) string {

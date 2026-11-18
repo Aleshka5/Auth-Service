@@ -34,11 +34,17 @@ Browser
   -> qwen-image:8000  image.filenkov.store (X-Auth-*; Cookie forwarded)
   -> qwen38:4001      llm.filenkov.store (X-Auth-*)
   -> rag-edge:8080    rag.filenkov.store (X-Auth-*; Cookie forwarded)
+  -> grafana:3000     observer.filenkov.store (X-Auth-*; Cookie forwarded, own login)
+  -> jitsi-web:8000   meet.filenkov.store (Jitsi Meet; X-Auth-*; Cookie forwarded, WS)
 ```
 
 Storage sits on `auth_network`; User-Service on external
 `user_network`; Qwen Image on external `models_network`; llama.cpp
-(`qwen38`) on external `models_network` (both owned by Switch-Service); RAG-Chat (`rag-edge`) on external `rag_edge`.
+(`qwen38`) on external `models_network` (both owned by Switch-Service); RAG-Chat (`rag-edge`) on external `rag_edge`. Grafana (`grafana`, the Common observability stack in
+`~/projects/Common/observability`) on external `common_network`. Jitsi Meet
+(`jitsi-web`, the podman stack in `~/projects/Jitsi-Meet`) on external
+`deploy_auth_network`; its container is aliased `jitsi-web` there because the bare name
+`web` belongs to the hub SPA.
 
 ## Config
 
@@ -64,6 +70,8 @@ upstreams:
   qwen_image: "http://qwen-image:8000"
   qwen38: "http://qwen38:4001"
   rag: "http://rag-edge:8080"
+  grafana: "http://grafana:3000"
+  jitsi_web: "http://jitsi-web:8000" # nginx in the image listens on 8000; TLS ends at Caddy
 
 hosts:
   filenkov.store:
@@ -152,9 +160,38 @@ hosts:
       - match: /*
         upstream: rag
         auth: session
+
+  observer.filenkov.store:
+    role_field: global_role
+    timeouts:
+      proxy: 5m
+    routes:
+      - match: /api/health
+        upstream: grafana
+        auth: public
+      - match: /*
+        upstream: grafana
+        auth: session
+
+  # Jitsi Meet. LAN + WireGuard only: no public DNS record, media is UDP straight to
+  # the bridge, and this gateway only sees signaling/UI. permissions_policy overrides
+  # the strict default because the app calls getUserMedia()/getDisplayMedia().
+  meet.filenkov.store:
+    role_field: global_role
+    permissions_policy: "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+    timeouts:
+      proxy: 5m # long-lived /xmpp-websocket and /colibri-ws/* tunnels
+    routes:
+      - match: /*
+        upstream: jitsi_web
+        auth: session
 ```
 
 First matching route wins. Put specific prefixes first.
+
+`observer.filenkov.store` is Grafana behind the same Google gate as every other
+host, with Grafana's own login on top (`anonymous` off). Prometheus stays on
+`127.0.0.1:9090` and is not published through the edge.
 
 ## Request flow
 
@@ -213,8 +250,15 @@ logout. User-Service role changes to `BLOCKED` should set `rejected:user:{uuid}`
 
 Hosts in the YAML are the allowlist (https in production). No `WHITELIST_JSON`.
 The list sets the JWT `aud`: `filenkov.store` (hub) plus `storage.filenkov.store`,
-`image.filenkov.store`, `llm.filenkov.store`, and
-`rag.filenkov.store`.
+`image.filenkov.store`, `llm.filenkov.store`, `rag.filenkov.store`,
+`observer.filenkov.store`, `audio.filenkov.store`, `meet.filenkov.store`.
+
+**Adding a host therefore touches two running processes.** `gateway` uses the list to build
+the `return_to` it puts on the login redirect; `api` validates the incoming `return_to`
+against the same file, and it reads the file **only at startup** (`SetGatewayHosts`). Restart
+both (`podman restart gateway resume_api`) — restarting only `gateway` leaves the login
+redirect pointing at a host the API then rejects with `400 invalid return_to`. No image rebuild
+is needed: the YAML is bind-mounted read-only into both containers.
 
 ## Caddy
 
@@ -286,6 +330,7 @@ internal/gateway/
   `/oauth` to api.
 - `curl` with the Host header for the storage.filenkov.store route reaches app:8000 (public `GET /health`, session catch-all) — the route is now live.
 - `curl` with the Host header for the rag.filenkov.store route reaches rag-edge:8080 (public `GET /health`, catch-all session), and TestLoadDefaultYAML asserts the rag host, its 5m proxy timeout, and the return_to allowlist entry.
+- `curl` with the Host header for the observer.filenkov.store route reaches grafana:3000 (public `GET /api/health`, session catch-all); `/` must redirect to `/auth` without a session cookie.
 
 ## Rollout
 

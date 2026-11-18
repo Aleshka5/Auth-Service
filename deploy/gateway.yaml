@@ -25,10 +25,35 @@ upstreams:
   qwen38: "http://qwen38:4001"
   # RAG-Chat edge container `rag-edge` on rag_edge (external; the RAG-Chat stack creates the network).
   rag: "http://rag-edge:8080"
+  # Observability: Grafana container on common_network (~/projects/Common/observability).
+  grafana: "http://grafana:3000"
+  # audio.filenkov.store: the `audio-api` container of the ASR stack
+  # (~/projects/ASR-Service, compose project `audio`) on auth_network (deploy_auth_network).
+  audio: "http://audio-api:8000"
+  # The SPA of the same stack: nginx, compose service `frontend`. It serves static files
+  # only (frontend/nginx.conf), so every `/api/*` request must go to `audio`, not here.
+  audio_web: "http://frontend:80"
   # Switch-Service control plane for the model containers. It runs on the host
-  # (it needs nvidia-smi and the rootless podman socket), and rootless podman
-  # exposes the host to containers as host.docker.internal.
-  switch: "http://host.docker.internal:8095"
+  # (it needs nvidia-smi and the rootless podman socket).
+  #
+  # The address is the host's LAN IP, not host.docker.internal. On this host the
+  # `extra_hosts: host.docker.internal:host-gateway` entry resolves to
+  # 169.254.1.2 and that address is black-holed under rootless podman 5.7 with
+  # netavark: from inside this container `nc -z -w 3 169.254.1.2 8095` times out
+  # (wget waits out its own timeout), while 192.168.1.102:8095 answers 200. The
+  # control plane binds 0.0.0.0, so the LAN IP is the only path that works —
+  # masquerade makes the container's source address 192.168.1.102 on arrival,
+  # which is also why the host firewall allows dport 8095 from the host's own
+  # address only (see the switch.service unit). The address is DHCP-reserved on
+  # the ZTE F680; change it here if the host moves.
+  switch: "http://192.168.1.102:8095"
+  # Jitsi Meet frontend (~/projects/Jitsi-Meet, podman-compose). The container is
+  # aliased `jitsi-web` on deploy_auth_network because the bare name `web` already
+  # belongs to the hub SPA. Inside the image nginx listens on 8000 (not 80): TLS is
+  # terminated here at Caddy, so the container runs with DISABLE_HTTPS=1.
+  # Its nginx also proxies /xmpp-websocket → prosody and /colibri-ws → jvb, so this
+  # one upstream covers the UI, signaling and data channels.
+  jitsi_web: "http://jitsi-web:8000"
 
 hosts:
   filenkov.store:
@@ -166,3 +191,77 @@ hosts:
       - match: /*
         upstream: rag
         auth: session
+
+  # audio.filenkov.store — ASR stack (~/projects/ASR-Service). Product role is the
+  # `global_role` hub: open to anyone signed in, no per-service role.
+  # Verified fragment: ~/projects/ASR-Service/deploy/gateway.yaml (`make gateway`).
+  audio.filenkov.store:
+    role_field: global_role
+    # The only host allowed to use the microphone: the record button calls
+    # getUserMedia(). The gateway stamps its own Permissions-Policy on every response,
+    # and the browser intersects duplicate policies, so without this override the Caddy
+    # block's microphone=(self) would be cancelled by the gateway's microphone=().
+    permissions_policy: "camera=(), microphone=(self), geolocation=()"
+    # A file upload answers only after the body is accepted; diarization takes minutes.
+    # This is a ResponseHeaderTimeout, not the lifetime limit of a voice-note socket.
+    timeouts:
+      proxy: 30m
+    routes:
+      # First match wins: /health must precede /api/*, and /api/* must precede /*.
+      # Public — an uptime check needs no cookie.
+      - match: /health
+        upstream: audio
+        auth: public
+      # The API and the voice-note socket (`/api/voice-notes/{id}/stream`) live in audio-api.
+      # Only with a session; the gateway answers 401 JSON, not 302.
+      - match: /api/*
+        upstream: audio
+        auth: session
+      # Everything else is the SPA: nginx answers index.html for any path (client-side
+      # routing). Before this route existed the UI host returned audio-api's
+      # `{"detail":"Not Found"}` for `/` (verified on the stand 2026-11-01).
+      - match: /*
+        upstream: audio_web
+        auth: session
+
+  # Observability: Grafana (Prometheus UI is not exposed — localhost only).
+  # Same Google gate as every other product host, and Grafana keeps its own login
+  # on top (anonymous access is off), so the dashboards are behind two gates.
+  observer.filenkov.store:
+    role_field: global_role
+    # Wide dashboard ranges hit the HDD-backed TSDB; the default 60s would cut them.
+    timeouts:
+      proxy: 5m
+    routes:
+      # Grafana's own health endpoint, public so uptime checks do not need a session.
+      # First match wins, so it must precede the catch-all.
+      - match: /api/health
+        upstream: grafana
+        auth: public
+      # Login page, assets, /api/* and the Live WebSocket all take this path.
+      - match: /*
+        upstream: grafana
+        auth: session
+
+  # meet.filenkov.store — Jitsi Meet (~/projects/Jitsi-Meet, podman-compose).
+  # LAN + WireGuard only: the name is only in /etc/hosts (dnsmasq), and Caddy pins
+  # the site to 10.10.0.0/24 + 192.168.1.0/24 as a second layer. Media never passes
+  # this gateway — it is UDP straight to jvb, which advertises 192.168.1.102 and
+  # 10.10.0.1, so there is no port forward and no internet access.
+  meet.filenkov.store:
+    role_field: global_role
+    # Jitsi calls getUserMedia() and getDisplayMedia(). The strict default
+    # (camera=(), microphone=()) would block the camera, the microphone and screen
+    # sharing, and the browser intersects this header with Caddy's copy.
+    permissions_policy: "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+    # Long-lived WebSockets: /xmpp-websocket (signaling) and /colibri-ws/*
+    # (data channels). `proxy` is a response-header wait, kept generous for joins.
+    timeouts:
+      proxy: 5m
+    routes:
+      # Single upstream: the web container's nginx serves the app, /config.js,
+      # the WebSocket proxies and /http-bind. First match wins — nothing else needed.
+      - match: /*
+        upstream: jitsi_web
+        auth: session
+

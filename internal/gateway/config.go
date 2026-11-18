@@ -112,6 +112,13 @@ type Host struct {
 	Aliases   []string      `yaml:"aliases"`
 	Routes    []Route       `yaml:"routes"`
 	Timeouts  *HostTimeouts `yaml:"timeouts"`
+	// PermissionsPolicy overrides the response `Permissions-Policy` header for this host.
+	// Empty keeps the strict default (camera, microphone and geolocation denied). A host
+	// that needs the microphone — audio.filenkov.store, whose record button calls
+	// getUserMedia() — sets `camera=(), microphone=(self), geolocation=()`. Without this
+	// the gateway and Caddy would each send a policy header and the browser, which
+	// intersects them, would deny the microphone.
+	PermissionsPolicy string `yaml:"permissions_policy"`
 }
 
 type Route struct {
@@ -147,6 +154,8 @@ type compiledHost struct {
 	roleField    string
 	proxyTimeout time.Duration // 0 = use file-level timeouts.proxy
 	routes       []compiledRoute
+	// Empty = the strict default in `applySecurityHeaders`.
+	permissionsPolicy string
 }
 
 // Router is a validated, host+path lookup table. First matching route wins.
@@ -270,6 +279,9 @@ func compileHost(name string, h *Host, upstreams map[string]string) (*compiledHo
 		return nil, fmt.Errorf("hosts.%s: at least one route is required", name)
 	}
 	ch := &compiledHost{name: name, roleField: roleField, routes: make([]compiledRoute, 0, len(h.Routes))}
+	if h.PermissionsPolicy != "" {
+		ch.permissionsPolicy = strings.TrimSpace(h.PermissionsPolicy)
+	}
 	if h.Timeouts != nil && h.Timeouts.Proxy > 0 {
 		ch.proxyTimeout = h.Timeouts.Proxy
 	}
